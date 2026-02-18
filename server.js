@@ -29,7 +29,10 @@ function yahooFetch(url) {
 app.get('/api/okx/candles/:instId', async (req, res) => {
   try {
     const { instId } = req.params;
-    const bar = req.query.bar || '1H';
+    const barRaw = req.query.bar || '1H';
+    // OKX bar format: 1m,5m,15m,30m = lowercase m; 1H,4H,1D,1W,1M = UPPERCASE
+    const BAR_MAP = {'1h':'1H','2h':'2H','4h':'4H','6h':'6H','12h':'12H','1d':'1D','1w':'1W','1mo':'1M'};
+    const bar = BAR_MAP[barRaw] || barRaw;
     const limit = req.query.limit || '300';
     const url = `https://www.okx.com/api/v5/market/candles?instId=${encodeURIComponent(instId)}&bar=${bar}&limit=${limit}`;
     const data = await yahooFetch(url);
