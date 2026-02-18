@@ -1,8 +1,7 @@
 {
-  "_version": "3.0",
+  "_version": "3.2",
   "_lastUpdate": "2026-02-19",
   "_comment": "BottomUP Martingale V2 — Kripto + Hisse + Emtia",
-
   "defaults": {
     "symbol": "ETHUSDT",
     "timeframe": "1h",
@@ -16,91 +15,387 @@
     "atrLength": 14,
     "profitDivisor": 2
   },
-
   "allocations": {
-    "layer1": 10, "layer2": 15, "layer3": 20, "layer4": 25, "layer5": 30
+    "layer1": 10,
+    "layer2": 15,
+    "layer3": 20,
+    "layer4": 25,
+    "layer5": 30
   },
-
   "markets": {
     "crypto": {
-      "label": "🪙 Kripto",
-      "source": "binance",
+      "label": "🪙 Kripto (OKX)",
+      "source": "okx",
       "symbols": [
-        "BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT","DOGEUSDT","ADAUSDT",
-        "AVAXUSDT","DOTUSDT","LINKUSDT","MATICUSDT","UNIUSDT","ATOMUSDT",
-        "NEARUSDT","LTCUSDT","APTUSDT","ARBUSDT","OPUSDT","SUIUSDT","SEIUSDT",
-        "INJUSDT","TIAUSDT","TONUSDT","PEPEUSDT","WIFUSDT","TRXUSDT"
+        "BTC-USDT",
+        "ETH-USDT",
+        "SOL-USDT",
+        "BNB-USDT",
+        "XRP-USDT",
+        "DOGE-USDT",
+        "ADA-USDT",
+        "AVAX-USDT",
+        "DOT-USDT",
+        "LINK-USDT",
+        "MATIC-USDT",
+        "UNI-USDT",
+        "ATOM-USDT",
+        "NEAR-USDT",
+        "LTC-USDT",
+        "APT-USDT",
+        "ARB-USDT",
+        "OP-USDT",
+        "SUI-USDT",
+        "SEI-USDT",
+        "INJ-USDT",
+        "TIA-USDT",
+        "TON-USDT",
+        "PEPE-USDT",
+        "WIF-USDT",
+        "TRX-USDT"
       ],
       "timeframes": [
-        {"label":"15m","value":"15m","limit":500},
-        {"label":"1h","value":"1h","limit":500},
-        {"label":"4h","value":"4h","limit":500},
-        {"label":"1d","value":"1d","limit":365},
-        {"label":"1w","value":"1w","limit":200}
+        {
+          "label": "15d",
+          "value": "15m",
+          "limit": 300
+        },
+        {
+          "label": "1s",
+          "value": "1H",
+          "limit": 300
+        },
+        {
+          "label": "4s",
+          "value": "4H",
+          "limit": 300
+        },
+        {
+          "label": "1g",
+          "value": "1D",
+          "limit": 300
+        },
+        {
+          "label": "1h",
+          "value": "1W",
+          "limit": 100
+        }
       ]
     },
     "stocks": {
       "label": "📈 ABD Hisse",
       "source": "yahoo",
       "symbols": [
-        "AAPL","MSFT","GOOGL","AMZN","NVDA","META","TSLA","BRK-B",
-        "JPM","V","UNH","MA","HD","PG","JNJ","XOM","COST","ABBV",
-        "MRK","AVGO","KO","PEP","WMT","LLY","NFLX","AMD","CRM",
-        "ORCL","DIS","ADBE","CSCO","INTC","QCOM","BA","NKE",
-        "PYPL","SQ","COIN","PLTR","SOFI","RIVN","SNOW","UBER"
+        "AAPL",
+        "MSFT",
+        "GOOGL",
+        "AMZN",
+        "NVDA",
+        "META",
+        "TSLA",
+        "BRK-B",
+        "JPM",
+        "V",
+        "UNH",
+        "MA",
+        "HD",
+        "PG",
+        "JNJ",
+        "XOM",
+        "COST",
+        "ABBV",
+        "MRK",
+        "AVGO",
+        "KO",
+        "PEP",
+        "WMT",
+        "LLY",
+        "NFLX",
+        "AMD",
+        "CRM",
+        "ORCL",
+        "DIS",
+        "ADBE",
+        "CSCO",
+        "INTC",
+        "QCOM",
+        "BA",
+        "NKE",
+        "PYPL",
+        "SQ",
+        "COIN",
+        "PLTR",
+        "SOFI",
+        "RIVN",
+        "SNOW",
+        "UBER"
       ],
       "timeframes": [
-        {"label":"1g","value":"1d","range":"6mo"},
-        {"label":"1h","value":"1h","range":"5d"},
-        {"label":"5d","value":"5d","range":"1y"},
-        {"label":"1a","value":"1wk","range":"2y"},
-        {"label":"1ay","value":"1mo","range":"10y"}
+        {
+          "label": "1g",
+          "value": "1d",
+          "range": "6mo"
+        },
+        {
+          "label": "1h",
+          "value": "1h",
+          "range": "5d"
+        },
+        {
+          "label": "5d",
+          "value": "5d",
+          "range": "1y"
+        },
+        {
+          "label": "1a",
+          "value": "1wk",
+          "range": "2y"
+        },
+        {
+          "label": "1ay",
+          "value": "1mo",
+          "range": "10y"
+        }
       ]
     },
     "commodities": {
       "label": "🏗️ Emtia",
       "source": "yahoo",
       "symbols": [
-        "GC=F","SI=F","CL=F","NG=F","HG=F","PL=F","PA=F",
-        "ZC=F","ZW=F","ZS=F","KC=F","CC=F","SB=F","CT=F",
-        "ALI=F","EURUSD=X","GBPUSD=X","USDJPY=X","USDTRY=X"
+        "GC=F",
+        "SI=F",
+        "CL=F",
+        "NG=F",
+        "HG=F",
+        "PL=F",
+        "PA=F",
+        "ZC=F",
+        "ZW=F",
+        "ZS=F",
+        "KC=F",
+        "CC=F",
+        "SB=F",
+        "CT=F",
+        "ALI=F",
+        "EURUSD=X",
+        "GBPUSD=X",
+        "USDJPY=X",
+        "USDTRY=X"
       ],
       "displayNames": {
-        "GC=F":"Altın","SI=F":"Gümüş","CL=F":"Petrol (WTI)","NG=F":"Doğalgaz",
-        "HG=F":"Bakır","PL=F":"Platin","PA=F":"Paladyum",
-        "ZC=F":"Mısır","ZW=F":"Buğday","ZS=F":"Soya","KC=F":"Kahve",
-        "CC=F":"Kakao","SB=F":"Şeker","CT=F":"Pamuk","ALI=F":"Alüminyum",
-        "EURUSD=X":"EUR/USD","GBPUSD=X":"GBP/USD","USDJPY=X":"USD/JPY","USDTRY=X":"USD/TRY"
+        "GC=F": "Altın",
+        "SI=F": "Gümüş",
+        "CL=F": "Petrol (WTI)",
+        "NG=F": "Doğalgaz",
+        "HG=F": "Bakır",
+        "PL=F": "Platin",
+        "PA=F": "Paladyum",
+        "ZC=F": "Mısır",
+        "ZW=F": "Buğday",
+        "ZS=F": "Soya",
+        "KC=F": "Kahve",
+        "CC=F": "Kakao",
+        "SB=F": "Şeker",
+        "CT=F": "Pamuk",
+        "ALI=F": "Alüminyum",
+        "EURUSD=X": "EUR/USD",
+        "GBPUSD=X": "GBP/USD",
+        "USDJPY=X": "USD/JPY",
+        "USDTRY=X": "USD/TRY"
       },
       "timeframes": [
-        {"label":"1g","value":"1d","range":"6mo"},
-        {"label":"1h","value":"1h","range":"5d"},
-        {"label":"5d","value":"5d","range":"1y"},
-        {"label":"1a","value":"1wk","range":"2y"},
-        {"label":"1ay","value":"1mo","range":"10y"}
+        {
+          "label": "1g",
+          "value": "1d",
+          "range": "6mo"
+        },
+        {
+          "label": "1h",
+          "value": "1h",
+          "range": "5d"
+        },
+        {
+          "label": "5d",
+          "value": "5d",
+          "range": "1y"
+        },
+        {
+          "label": "1a",
+          "value": "1wk",
+          "range": "2y"
+        },
+        {
+          "label": "1ay",
+          "value": "1mo",
+          "range": "10y"
+        }
       ]
     }
   },
-
   "smartDefaults": {
-    "BTC":    {"aptr":[200,500,1500,3000,6000],"profit":[100,250,750,1500,3000]},
-    "ETH":    {"aptr":[10,30,80,200,500],"profit":[5,15,40,100,250]},
-    "BNB":    {"aptr":[3,8,20,50,100],"profit":[1.5,4,10,25,50]},
-    "MID":    {"aptr":[0.5,2,5,15,30],"profit":[0.25,1,2.5,7,15]},
-    "LOW":    {"aptr":[0.002,0.005,0.015,0.04,0.1],"profit":[0.001,0.0025,0.007,0.02,0.05]},
-    "STOCK":  {"aptr":[1,3,8,20,50],"profit":[0.5,1.5,4,10,25]},
-    "COMMODITY":{"aptr":[2,5,15,40,100],"profit":[1,2.5,7,20,50]},
-    "OTHER":  {"aptr":[1,3,10,25,60],"profit":[0.5,1.5,5,12,30]}
+    "BTC": {
+      "aptr": [
+        200,
+        500,
+        1500,
+        3000,
+        6000
+      ],
+      "profit": [
+        100,
+        250,
+        750,
+        1500,
+        3000
+      ]
+    },
+    "ETH": {
+      "aptr": [
+        10,
+        30,
+        80,
+        200,
+        500
+      ],
+      "profit": [
+        5,
+        15,
+        40,
+        100,
+        250
+      ]
+    },
+    "BNB": {
+      "aptr": [
+        3,
+        8,
+        20,
+        50,
+        100
+      ],
+      "profit": [
+        1.5,
+        4,
+        10,
+        25,
+        50
+      ]
+    },
+    "MID": {
+      "aptr": [
+        0.5,
+        2,
+        5,
+        15,
+        30
+      ],
+      "profit": [
+        0.25,
+        1,
+        2.5,
+        7,
+        15
+      ]
+    },
+    "LOW": {
+      "aptr": [
+        0.002,
+        0.005,
+        0.015,
+        0.04,
+        0.1
+      ],
+      "profit": [
+        0.001,
+        0.0025,
+        0.007,
+        0.02,
+        0.05
+      ]
+    },
+    "STOCK": {
+      "aptr": [
+        1,
+        3,
+        8,
+        20,
+        50
+      ],
+      "profit": [
+        0.5,
+        1.5,
+        4,
+        10,
+        25
+      ]
+    },
+    "COMMODITY": {
+      "aptr": [
+        2,
+        5,
+        15,
+        40,
+        100
+      ],
+      "profit": [
+        1,
+        2.5,
+        7,
+        20,
+        50
+      ]
+    },
+    "OTHER": {
+      "aptr": [
+        1,
+        3,
+        10,
+        25,
+        60
+      ],
+      "profit": [
+        0.5,
+        1.5,
+        5,
+        12,
+        30
+      ]
+    }
   },
-
   "symbolGroups": {
-    "MID": ["SOLUSDT","AVAXUSDT","DOTUSDT","LINKUSDT","UNIUSDT","NEARUSDT","APTUSDT","INJUSDT","SUIUSDT","ATOMUSDT"],
-    "LOW": ["DOGEUSDT","PEPEUSDT","WIFUSDT","SEIUSDT","TRXUSDT","XRPUSDT","ADAUSDT"]
+    "MID": [
+      "SOL-USDT",
+      "AVAX-USDT",
+      "DOT-USDT",
+      "LINK-USDT",
+      "UNI-USDT",
+      "NEAR-USDT",
+      "APT-USDT",
+      "INJ-USDT",
+      "SUI-USDT",
+      "ATOM-USDT"
+    ],
+    "LOW": [
+      "DOGE-USDT",
+      "PEPE-USDT",
+      "WIF-USDT",
+      "SEI-USDT",
+      "TRX-USDT",
+      "XRP-USDT",
+      "ADA-USDT"
+    ]
   },
-
   "riskRules": {
-    "viable":{"returnMin":0,"maxDDMax":25,"profitFactorMin":1.2},
-    "risky":{"returnMin":0},
-    "unprofitable":{"returnMax":0}
+    "viable": {
+      "returnMin": 0,
+      "maxDDMax": 25,
+      "profitFactorMin": 1.2
+    },
+    "risky": {
+      "returnMin": 0
+    },
+    "unprofitable": {
+      "returnMax": 0
+    }
   }
 }
