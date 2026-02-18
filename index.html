@@ -112,6 +112,340 @@ function SymbolSearch({mkt,sym,onSelect,presets}){
   </div>;
 }
 
+// ═══ LIVE SIGNAL ENGINE ═══
+function calcSignal(bars,livePrice,cfg){
+  if(!bars||bars.length<20||!livePrice)return null;
+  const{al,man,mA,mP,aL,pD,rOn,rV,eOn,eL}=cfg;
+  const last=bars.length-1;
+  const p=livePrice;
+  const a=_atr(bars,last,aL);
+  const ema=_ema(bars,last,eL||10);
+  const rsi=_rsi(bars,last);
+  const fA=man?mA:a;
+  const fT=man?mP:a/pD;
+
+  // Calculate entry levels from current price
+  const entries=[];
+  let base=p;
+  for(let i=0;i<5;i++){
+    if(i===0)entries.push({layer:i+1,price:+base.toFixed(4),alloc:al[i],status:"entry"});
+    else{base=entries[i-1].price-fA;entries.push({layer:i+1,price:+base.toFixed(4),alloc:al[i],status:"waiting"});}
+  }
+
+  // Average entry if all layers filled
+  const avgEntry=entries.reduce((s,e)=>s+e.price*e.alloc,0)/entries.reduce((s,e)=>s+e.alloc,0);
+  const tp=+(avgEntry+fT).toFixed(4);
+
+  // Determine signal state
+  const emaOk=eOn?p<ema:true;
+  const rsiOk=rOn?rsi<rV:true;
+  let signal="WAIT";let signalColor="#6B7280";
+  if(emaOk&&rsiOk){signal="LONG HAZIR";signalColor="#2DC771";}
+  if(!emaOk){signal="EMA ÜSTÜNDE";signalColor="#F97316";}
+  if(rOn&&rsi>70){signal="RSI AŞIRI ALIM";signalColor="#EF4444";}
+
+  // Proximity alerts — is price near any entry?
+  const alerts=[];
+  entries.forEach(e=>{
+    const dist=((p-e.price)/p*100);
+    const absDist=Math.abs(dist);
+    if(absDist<1.5)alerts.push({layer:e.layer,price:e.price,dist:+dist.toFixed(2),hot:absDist<0.5});
+  });
+  // TP proximity
+  const tpDist=((tp-p)/p*100);
+  if(Math.abs(tpDist)<2)alerts.push({layer:"TP",price:tp,dist:+tpDist.toFixed(2),hot:Math.abs(tpDist)<0.5});
+
+  return{entries,tp,avgEntry:+avgEntry.toFixed(4),signal,signalColor,ema:+ema.toFixed(4),rsi:+rsi.toFixed(1),atr:+a.toFixed(4),fA:+fA.toFixed(4),fT:+fT.toFixed(4),alerts,livePrice:p};
+}
+
+// ═══ SIGNAL CARD COMPONENT ═══
+function SignalCard({sig,sym,tf}){
+  if(!sig)return null;
+  const hot=sig.alerts.some(a=>a.hot);
+  return <div style={{background:hot?"rgba(239,68,68,0.06)":P.card,border:`1px solid ${hot?"rgba(239,68,68,0.3)":P.border}`,borderRadius:14,padding:14,marginBottom:12,animation:hot?"pulse 1.5s infinite":"fadeIn 0.3s"}}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+      <div style={{display:"flex",alignItems:"center",gap:8}}>
+        <div style={{width:10,height:10,borderRadius:5,background:sig.signalColor,animation:"pulse 2s infinite"}}/>
+        <span style={{fontFamily:Fd,fontSize:18,color:P.white,fontWeight:700}}>📡 Canlı Sinyal</span>
+      </div>
+      <div style={{display:"flex",alignItems:"center",gap:6}}>
+        <span style={{fontFamily:Fm,fontSize:11,color:P.ash}}>{dN(sym)} • {tf}</span>
+        <span style={{fontFamily:Fm,fontSize:11,fontWeight:700,color:sig.signalColor,background:sig.signalColor+"18",padding:"2px 8px",borderRadius:6}}>{sig.signal}</span>
+      </div>
+    </div>
+    {/* Live Price */}
+    <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:12}}>
+      <span style={{fontFamily:Fm,fontSize:28,fontWeight:700,color:P.white}}>${sig.livePrice.toLocaleString("en")}</span>
+      <span style={{fontFamily:Fm,fontSize:11,color:P.ash}}>EMA: ${sig.ema} | RSI: {sig.rsi} | ATR: ${sig.atr}</span>
+    </div>
+    {/* Entry Levels */}
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:6,marginBottom:10}}>
+      {sig.entries.map(e=>{
+        const dist=((sig.livePrice-e.price)/sig.livePrice*100);
+        const near=Math.abs(dist)<1.5;
+        const veryNear=Math.abs(dist)<0.5;
+        return <div key={e.layer} style={{background:veryNear?"rgba(45,199,113,0.12)":near?"rgba(45,199,113,0.06)":P.surface,border:`1px solid ${veryNear?P.jade+"66":near?P.jade+"33":P.border}`,borderRadius:10,padding:"8px 10px",animation:veryNear?"pulse 1s infinite":"none"}}>
+          <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
+            <span style={{fontFamily:Fm,fontSize:9,color:veryNear?P.jade:P.ash,letterSpacing:"0.1em",fontWeight:600}}>KATMAN {e.layer}</span>
+            <span style={{fontFamily:Fm,fontSize:9,color:P.violet}}>%{e.alloc}</span>
+          </div>
+          <div style={{fontFamily:Fm,fontSize:14,color:veryNear?P.jade:P.mist,fontWeight:600}}>${e.price.toLocaleString("en")}</div>
+          <div style={{fontFamily:Fm,fontSize:10,color:dist>0?P.jade:P.danger}}>{dist>0?"▼":"▲"} {Math.abs(dist).toFixed(2)}%</div>
+        </div>;
+      })}
+      {/* TP Card */}
+      <div style={{background:"rgba(123,92,245,0.06)",border:`1px solid rgba(123,92,245,0.3)`,borderRadius:10,padding:"8px 10px"}}>
+        <div style={{fontFamily:Fm,fontSize:9,color:P.violet,letterSpacing:"0.1em",fontWeight:600,marginBottom:3}}>🎯 HEDEF</div>
+        <div style={{fontFamily:Fm,fontSize:14,color:P.violet,fontWeight:600}}>${sig.tp.toLocaleString("en")}</div>
+        <div style={{fontFamily:Fm,fontSize:10,color:P.ash}}>Ort: ${sig.avgEntry}</div>
+      </div>
+    </div>
+    {/* Proximity Alerts */}
+    {sig.alerts.length>0&&<div style={{background:P.surface,borderRadius:8,padding:"8px 10px"}}>
+      {sig.alerts.map((a,i)=><div key={i} style={{display:"flex",alignItems:"center",gap:6,padding:"3px 0",fontFamily:Fm,fontSize:11}}>
+        <span style={{color:a.hot?P.danger:P.ember,animation:a.hot?"pulse 0.5s infinite":"none"}}>{a.hot?"🔴":"🟡"}</span>
+        <span style={{color:P.mist}}>{a.layer==="TP"?"Hedef":"Katman "+a.layer} <span style={{color:P.white,fontWeight:600}}>${a.price}</span></span>
+        <span style={{color:Math.abs(a.dist)<0.5?P.danger:P.ember,fontWeight:600}}>%{a.dist} uzakta</span>
+        {a.hot&&<span style={{color:P.danger,fontWeight:700,fontSize:10,animation:"pulse 0.8s infinite"}}>⚡ YAKIN!</span>}
+      </div>)}
+    </div>}
+  </div>;
+}
+
+// ═══ PAPER TRADING ENGINE ═══
+function createPaperEngine(initialCap=10000){
+  return{
+    cap:initialCap,cash:initialCap,
+    bots:{},// {sym: {positions:[], cfg:{}, active:true}}
+    trades:[],// closed trades history
+    startTime:Date.now(),
+    getStats(){
+      const closed=this.trades;
+      const wins=closed.filter(t=>t.pnl>0);
+      const losses=closed.filter(t=>t.pnl<=0);
+      const realized=closed.reduce((s,t)=>s+t.pnl,0);
+      let unrealized=0;
+      Object.values(this.bots).forEach(b=>{
+        if(!b.active||!b.positions.length||!b.lastPrice)return;
+        b.positions.forEach(p=>{unrealized+=(b.lastPrice-p.ep)*p.q;});
+      });
+      const posValue=Object.values(this.bots).reduce((s,b)=>{
+        if(!b.active||!b.lastPrice)return s;
+        return s+b.positions.reduce((ss,p)=>ss+p.q*b.lastPrice,0);
+      },0);
+      return{
+        equity:+(this.cash+posValue).toFixed(2),
+        cash:+this.cash.toFixed(2),
+        realized:+realized.toFixed(2),
+        unrealized:+unrealized.toFixed(2),
+        totalTrades:closed.length,
+        winRate:closed.length?+(wins.length/closed.length*100).toFixed(1):0,
+        wins:wins.length,losses:losses.length,
+        avgWin:wins.length?+(wins.reduce((s,t)=>s+t.pnl,0)/wins.length).toFixed(2):0,
+        avgLoss:losses.length?+(losses.reduce((s,t)=>s+t.pnl,0)/losses.length).toFixed(2):0,
+        openPositions:Object.entries(this.bots).reduce((s,[sym,b])=>s+(b.active?b.positions.length:0),0),
+        activeBots:Object.entries(this.bots).filter(([,b])=>b.active).length,
+      };
+    },
+    tick(sym,price){
+      const b=this.bots[sym];
+      if(!b||!b.active)return null;
+      b.lastPrice=price;
+      const{cfg}=b;
+      const al=cfg.al||[10,15,20,25,30];
+      const fA=cfg.mA||80;
+      const fT=cfg.mP||40;
+      const events=[];
+      // Check entry
+      if(!b.positions.length){
+        const amt=this.cash*(al[0]/100)*0.2;// use 20% of allocation per bot
+        if(amt>1&&this.cash>=amt){
+          b.positions.push({q:amt/price,ep:price,time:Date.now()});
+          this.cash-=amt;
+          events.push({type:"BUY",sym,layer:1,price,amt:+amt.toFixed(2)});
+        }
+      }else if(b.positions.length<5){
+        const lastEp=b.positions[b.positions.length-1].ep;
+        if(price<lastEp-fA){
+          const ly=b.positions.length;
+          const amt=this.cash*(al[ly]/100)*0.2;
+          if(amt>1&&this.cash>=amt){
+            b.positions.push({q:amt/price,ep:price,time:Date.now()});
+            this.cash-=amt;
+            events.push({type:"BUY",sym,layer:ly+1,price,amt:+amt.toFixed(2)});
+          }
+        }
+      }
+      // Check TP
+      if(b.positions.length>0){
+        const tQ=b.positions.reduce((s,x)=>s+x.q,0);
+        const tC=b.positions.reduce((s,x)=>s+x.q*x.ep,0);
+        const avgP=tC/tQ;
+        if(price>=avgP+fT){
+          const exitVal=tQ*price;
+          const pnl=exitVal-tC;
+          this.cash+=exitVal;
+          this.trades.push({sym,entry:+avgP.toFixed(2),exit:+price.toFixed(2),layers:b.positions.length,pnl:+pnl.toFixed(2),pnlPct:+((pnl/tC)*100).toFixed(2),time:Date.now()});
+          events.push({type:"SELL",sym,layers:b.positions.length,price,pnl:+pnl.toFixed(2)});
+          b.positions=[];
+        }
+      }
+      return events.length?events:null;
+    }
+  };
+}
+
+// ═══ PAPER TRADING PANEL ═══
+function PaperPanel({engine,setEngine,syms,cfg,liveData}){
+  const[selected,setSelected]=useState([]);
+  const[running,setRunning]=useState(false);
+  const[expanded,setExpanded]=useState(true);
+  const[logs,setLogs]=useState([]);
+  const wsRefs=useRef({});
+  const engineRef=useRef(engine);
+  engineRef.current=engine;
+
+  const topCoins=syms.filter(s=>s.endsWith("-USDT")).slice(0,20);
+
+  const toggleCoin=s=>{
+    setSelected(prev=>prev.includes(s)?prev.filter(x=>x!==s):[...prev,s]);
+  };
+
+  const start=()=>{
+    if(!selected.length)return;
+    const eng=createPaperEngine(10000);
+    const mA=cfg?.smartDefaults?.OTHER?.aptr?.[1]||80;
+    const mP=cfg?.smartDefaults?.OTHER?.profit?.[1]||40;
+    selected.forEach(sym=>{
+      eng.bots[sym]={positions:[],cfg:{al:[10,15,20,25,30],mA,mP},active:true,lastPrice:null};
+    });
+    setEngine(eng);
+    setRunning(true);
+    setLogs([{t:Date.now(),msg:"🚀 Paper Trading başlatıldı — $10,000 — "+selected.length+" coin"}]);
+
+    // Open WebSocket for all selected coins
+    Object.keys(wsRefs.current).forEach(k=>{try{wsRefs.current[k].close();}catch(e){}});
+    wsRefs.current={};
+    selected.forEach(sym=>{
+      try{
+        const w=new WebSocket('wss://ws.okx.com:8443/ws/v5/public');
+        w.onopen=()=>{w.send(JSON.stringify({op:"subscribe",args:[{channel:"trades",instId:sym}]}));};
+        w.onmessage=e=>{
+          try{
+            const d=JSON.parse(e.data);
+            if(!d.data||!d.data[0])return;
+            const px=+parseFloat(d.data[0].px);
+            if(!engineRef.current)return;
+            const evts=engineRef.current.tick(sym,px);
+            if(evts){
+              setLogs(prev=>[...evts.map(ev=>({
+                t:Date.now(),
+                msg:ev.type==="BUY"
+                  ?`🟢 ${ev.sym} K${ev.layer} — $${ev.price.toFixed(2)} — $${ev.amt}`
+                  :`🔴 ${ev.sym} SATIŞ (${ev.layers}K) — $${ev.price.toFixed(2)} — ${ev.pnl>=0?"+":""}$${ev.pnl}`
+              })),...prev].slice(0,50));
+              setEngine({...engineRef.current});
+            }
+          }catch(err){}
+        };
+        wsRefs.current[sym]=w;
+      }catch(e){}
+    });
+  };
+
+  const stop=()=>{
+    setRunning(false);
+    Object.keys(wsRefs.current).forEach(k=>{try{wsRefs.current[k].close();}catch(e){}});
+    wsRefs.current={};
+    setLogs(prev=>[{t:Date.now(),msg:"⏹ Paper Trading durduruldu"},...prev]);
+  };
+
+  // Cleanup on unmount
+  useEffect(()=>()=>{Object.keys(wsRefs.current).forEach(k=>{try{wsRefs.current[k].close();}catch(e){}});},[]);
+
+  const stats=engine?.getStats?.();
+  const eq=stats?.equity||10000;
+  const ret=stats?((eq-10000)/10000*100):0;
+
+  return <div style={{position:"fixed",bottom:0,left:0,right:0,zIndex:998,background:P.card,borderTop:`2px solid ${running?P.jade:P.border}`,boxShadow:"0 -8px 30px rgba(0,0,0,0.4)",transition:"0.3s"}}>
+    {/* Toggle Bar */}
+    <div onClick={()=>setExpanded(!expanded)} style={{padding:"8px 18px",display:"flex",alignItems:"center",justifyContent:"space-between",cursor:"pointer",borderBottom:expanded?`1px solid ${P.border}`:"none"}}>
+      <div style={{display:"flex",alignItems:"center",gap:8}}>
+        <span style={{fontSize:16}}>{running?"📈":"💰"}</span>
+        <span style={{fontFamily:Fd,fontSize:16,color:P.white,fontWeight:700}}>Paper <span style={{color:P.violet}}>Trading</span></span>
+        {running&&<div style={{width:8,height:8,borderRadius:4,background:P.jade,animation:"pulse 1.5s infinite"}}/>}
+        {running&&stats&&<span style={{fontFamily:Fm,fontSize:12,color:ret>=0?P.jade:P.danger,fontWeight:600,marginLeft:8}}>${eq.toLocaleString("en")} ({ret>=0?"+":""}{ret.toFixed(2)}%)</span>}
+      </div>
+      <div style={{display:"flex",alignItems:"center",gap:10}}>
+        {running&&stats&&<>
+          <span style={{fontFamily:Fm,fontSize:10,color:P.ash}}>Trade: {stats.totalTrades}</span>
+          <span style={{fontFamily:Fm,fontSize:10,color:P.ash}}>WR: {stats.winRate}%</span>
+          <span style={{fontFamily:Fm,fontSize:10,color:stats.realized>=0?P.jade:P.danger}}>R: {stats.realized>=0?"+":""}{stats.realized}</span>
+          <span style={{fontFamily:Fm,fontSize:10,color:stats.unrealized>=0?P.jade:P.danger}}>U: {stats.unrealized>=0?"+":""}{stats.unrealized.toFixed(2)}</span>
+        </>}
+        <span style={{fontFamily:Fm,fontSize:14,color:P.ash,transform:expanded?"rotate(180deg)":"none",transition:"0.2s"}}>▲</span>
+      </div>
+    </div>
+
+    {expanded&&<div style={{padding:"12px 18px",maxHeight:320,overflowY:"auto"}}>
+      {!running?<>
+        {/* Coin Selection */}
+        <div style={{fontFamily:Fm,fontSize:10,color:P.violet,letterSpacing:"0.12em",marginBottom:8,fontWeight:600}}>COİN SEÇ — PAPER TRADE</div>
+        <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:12}}>
+          {topCoins.map(s=><button key={s} onClick={()=>toggleCoin(s)} style={{fontFamily:Fm,fontSize:10,fontWeight:600,padding:"5px 10px",borderRadius:6,background:selected.includes(s)?"rgba(123,92,245,0.15)":"transparent",border:`1px solid ${selected.includes(s)?P.violet:P.border}`,color:selected.includes(s)?P.violet:P.ash,cursor:"pointer"}}>{s.replace("-USDT","")}</button>)}
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <button onClick={start} disabled={!selected.length} style={{fontFamily:Fs,fontSize:12,fontWeight:700,padding:"9px 24px",borderRadius:10,background:selected.length?`linear-gradient(135deg,${P.jade},#1a9d5c)`:"#2A2D3A",border:"none",color:P.white,cursor:selected.length?"pointer":"not-allowed",boxShadow:selected.length?`0 4px 16px ${P.jade}40`:"none"}}>🚀 Paper Trade Başlat ({selected.length} coin)</button>
+          <span style={{fontFamily:Fm,fontSize:11,color:P.ash}}>Başlangıç: $10,000 • Martingale stratejisi</span>
+        </div>
+      </>:<>
+        {/* Running Dashboard */}
+        <div style={{display:"flex",gap:10,marginBottom:12,flexWrap:"wrap"}}>
+          {/* Stats */}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(100px,1fr))",gap:5,flex:"1 1 500px"}}>
+            <div style={{background:P.surface,borderRadius:8,padding:"8px 10px"}}><div style={{fontFamily:Fm,fontSize:8,color:P.ash,letterSpacing:"0.08em",marginBottom:2}}>BAKİYE</div><div style={{fontFamily:Fm,fontSize:15,fontWeight:700,color:ret>=0?P.jade:P.danger}}>${eq.toLocaleString("en")}</div></div>
+            <div style={{background:P.surface,borderRadius:8,padding:"8px 10px"}}><div style={{fontFamily:Fm,fontSize:8,color:P.ash,letterSpacing:"0.08em",marginBottom:2}}>NAKİT</div><div style={{fontFamily:Fm,fontSize:13,fontWeight:600,color:P.mist}}>${stats?.cash.toLocaleString("en")}</div></div>
+            <div style={{background:P.surface,borderRadius:8,padding:"8px 10px"}}><div style={{fontFamily:Fm,fontSize:8,color:P.ash,letterSpacing:"0.08em",marginBottom:2}}>REALIZED</div><div style={{fontFamily:Fm,fontSize:13,fontWeight:600,color:stats?.realized>=0?P.jade:P.danger}}>{stats?.realized>=0?"+":""}{stats?.realized}</div></div>
+            <div style={{background:P.surface,borderRadius:8,padding:"8px 10px"}}><div style={{fontFamily:Fm,fontSize:8,color:P.ash,letterSpacing:"0.08em",marginBottom:2}}>UNREALIZED</div><div style={{fontFamily:Fm,fontSize:13,fontWeight:600,color:stats?.unrealized>=0?P.jade:P.danger}}>{stats?.unrealized>=0?"+":""}{stats?.unrealized.toFixed(2)}</div></div>
+            <div style={{background:P.surface,borderRadius:8,padding:"8px 10px"}}><div style={{fontFamily:Fm,fontSize:8,color:P.ash,letterSpacing:"0.08em",marginBottom:2}}>W / L</div><div style={{fontFamily:Fm,fontSize:13,fontWeight:600,color:P.mist}}><span style={{color:P.jade}}>{stats?.wins}</span> / <span style={{color:P.danger}}>{stats?.losses}</span></div></div>
+            <div style={{background:P.surface,borderRadius:8,padding:"8px 10px"}}><div style={{fontFamily:Fm,fontSize:8,color:P.ash,letterSpacing:"0.08em",marginBottom:2}}>WIN RATE</div><div style={{fontFamily:Fm,fontSize:13,fontWeight:600,color:stats?.winRate>=50?P.jade:P.danger}}>{stats?.winRate}%</div></div>
+            <div style={{background:P.surface,borderRadius:8,padding:"8px 10px"}}><div style={{fontFamily:Fm,fontSize:8,color:P.ash,letterSpacing:"0.08em",marginBottom:2}}>AÇIK POZ.</div><div style={{fontFamily:Fm,fontSize:13,fontWeight:600,color:P.ember}}>{stats?.openPositions}</div></div>
+            <div style={{background:P.surface,borderRadius:8,padding:"8px 10px"}}><div style={{fontFamily:Fm,fontSize:8,color:P.ash,letterSpacing:"0.08em",marginBottom:2}}>BOT</div><div style={{fontFamily:Fm,fontSize:13,fontWeight:600,color:P.violet}}>{stats?.activeBots} aktif</div></div>
+          </div>
+        </div>
+        {/* Open Positions per bot */}
+        {engine&&Object.entries(engine.bots).filter(([,b])=>b.active&&b.positions.length>0).length>0&&
+        <div style={{marginBottom:8}}>
+          <div style={{fontFamily:Fm,fontSize:9,color:P.ember,letterSpacing:"0.1em",marginBottom:4,fontWeight:600}}>AÇIK POZİSYONLAR</div>
+          <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+            {Object.entries(engine.bots).filter(([,b])=>b.active&&b.positions.length>0).map(([sym,b])=>{
+              const tC=b.positions.reduce((s,p)=>s+p.q*p.ep,0);
+              const mV=b.positions.reduce((s,p)=>s+p.q*(b.lastPrice||p.ep),0);
+              const uPnl=mV-tC;
+              return <div key={sym} style={{background:P.surface,borderRadius:8,padding:"6px 10px",border:`1px solid ${uPnl>=0?"rgba(45,199,113,0.2)":"rgba(239,68,68,0.2)"}`}}>
+                <div style={{fontFamily:Fm,fontSize:11,color:P.white,fontWeight:600}}>{sym.replace("-USDT","")}</div>
+                <div style={{fontFamily:Fm,fontSize:10,color:P.ash}}>K{b.positions.length} • ${b.lastPrice?.toFixed(2)||"—"}</div>
+                <div style={{fontFamily:Fm,fontSize:10,color:uPnl>=0?P.jade:P.danger,fontWeight:600}}>{uPnl>=0?"+":""}{uPnl.toFixed(2)}</div>
+              </div>;
+            })}
+          </div>
+        </div>}
+        {/* Trade Log */}
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+          <span style={{fontFamily:Fm,fontSize:9,color:P.violet,letterSpacing:"0.1em",fontWeight:600}}>İŞLEM LOG</span>
+          <button onClick={stop} style={{fontFamily:Fs,fontSize:10,fontWeight:600,padding:"4px 14px",borderRadius:6,background:"rgba(239,68,68,0.1)",border:"1px solid rgba(239,68,68,0.25)",color:P.danger,cursor:"pointer"}}>⏹ Durdur</button>
+        </div>
+        <div style={{maxHeight:100,overflowY:"auto",background:P.surface,borderRadius:8,padding:6}}>
+          {logs.map((l,i)=><div key={i} style={{fontFamily:Fm,fontSize:10,color:P.mist,padding:"2px 4px",borderBottom:`1px solid ${P.border}`}}>
+            <span style={{color:P.ash,marginRight:6}}>{new Date(l.t).toLocaleTimeString("tr-TR",{hour:"2-digit",minute:"2-digit",second:"2-digit"})}</span>{l.msg}
+          </div>)}
+          {!logs.length&&<div style={{fontFamily:Fm,fontSize:10,color:P.ash,textAlign:"center",padding:8}}>Sinyal bekleniyor...</div>}
+        </div>
+      </>}
+    </div>}
+  </div>;
+}
+
 function App(){
   const[cfg,setCfg]=useState(null);const[showTut,setShowTut]=useState(true);const[showDev,setShowDev]=useState(false);
   const[mkt,setMkt]=useState("crypto");const[sym,setSym]=useState("ETH-USDT");const[tf,setTf]=useState("1H");
@@ -120,6 +454,15 @@ function App(){
   const[aL,setAL]=useState(14);const[pD,setPD]=useState(2);const[rOn,setROn]=useState(false);const[rV,setRV]=useState(71);const[eOn,setEOn]=useState(true);
   const[res,setRes]=useState(null);const[bars,setBars]=useState(null);const[tab,setTab]=useState("candles");const[st,setSt]=useState("idle");
   const[lP,setLP]=useState(null);const[err,setErr]=useState(null);const ws=useRef(null);
+  const[sig,setSig]=useState(null);const[sigOn,setSigOn]=useState(false);
+  const[paperEng,setPaperEng]=useState(null);
+
+  // Recalculate signal whenever live price changes
+  useEffect(()=>{
+    if(!sigOn||!bars||!lP||mkt!=="crypto")return;
+    const s=calcSignal(bars,lP,{al:[a1,a2,a3,a4,a5],man,mA,mP,aL,pD,rOn,rV,eOn,eL:cfg?.defaults?.emaLength||10});
+    setSig(s);
+  },[lP,sigOn,bars,a1,a2,a3,a4,a5,man,mA,mP,aL,pD,rOn,rV,eOn,cfg,mkt]);
 
   const applyCfg=useCallback(c=>{setCfg(c);if(c.defaults){setMan(c.defaults.useManual!==false);setEOn(c.defaults.useEma!==false);setROn(c.defaults.useRsi===true);setRV(c.defaults.rsiLevel||71);setAL(c.defaults.atrLength||14);setPD(c.defaults.profitDivisor||2);}if(c.allocations){sA1(c.allocations.layer1||10);sA2(c.allocations.layer2||15);sA3(c.allocations.layer3||20);sA4(c.allocations.layer4||25);sA5(c.allocations.layer5||30);}},[]);
   useEffect(()=>{fetch('/api/strategy').then(r=>r.json()).then(applyCfg).catch(()=>{});},[applyCfg]);
@@ -164,11 +507,16 @@ function App(){
         {man?<><Sld l="APTR $" v={mA} set={setMA} min={0.0005} max={8000} step={mA>100?10:mA>10?1:mA>1?0.1:0.001} tip="Katmanlar arası fark."/><Sld l="Kâr $" v={mP} set={setMP} min={0.0005} max={4000} step={mP>50?5:mP>5?0.5:mP>0.5?0.05:0.0005} tip="Kâr hedefi."/></>:<><Sld l="ATR" v={aL} set={setAL} min={5} max={50}/><Sld l="Bölen" v={pD} set={setPD} min={1} max={5} step={0.5}/></>}
         <div style={{height:1,background:P.border,margin:"10px 0"}}/>
         <Tog l="EMA Filtre" v={eOn} set={setEOn}/><Tog l="RSI Çıkış" v={rOn} set={setROn}/>{rOn&&<Sld l="RSI" v={rV} set={setRV} min={50} max={90}/>}
+        {mkt==="crypto"&&bars&&<><div style={{height:1,background:P.border,margin:"10px 0"}}/>
+        <div style={{fontFamily:Fm,fontSize:10,color:P.ember,letterSpacing:"0.12em",marginBottom:6,textTransform:"uppercase",fontWeight:600}}>📡 CANLI SİNYAL</div>
+        <label style={{display:"flex",alignItems:"center",gap:8,fontFamily:Fs,fontSize:11,color:P.ash,marginBottom:6,cursor:"pointer"}}><div onClick={()=>setSigOn(!sigOn)} style={{width:36,height:20,borderRadius:10,background:sigOn?P.jade:"#2A2D3A",position:"relative",flexShrink:0,transition:"0.25s"}}><div style={{width:16,height:16,borderRadius:8,background:P.white,position:"absolute",top:2,left:sigOn?18:2,transition:"0.25s"}}/></div>{sigOn?"Sinyal Aktif ✅":"Sinyali Aç"}</label>
+        {sigOn&&sig&&<div style={{fontFamily:Fm,fontSize:10,color:sig.signalColor,fontWeight:600}}>{sig.signal}{sig.alerts.length>0&&<span style={{color:P.danger,animation:"pulse 0.8s infinite"}}> • {sig.alerts.filter(a=>a.hot).length} yakın!</span>}</div>}</>}
         {bars&&<div style={{marginTop:12,padding:10,background:"rgba(123,92,245,0.05)",borderRadius:10,border:`1px solid ${P.border}`,fontFamily:Fm,fontSize:10}}><div style={{color:P.violet,fontWeight:600}}>{dN(sym)} • {tf}</div><div style={{color:P.ash}}>{bars.length} mum • {mkt==="crypto"?"OKX":"Yahoo"}</div></div>}
       </div>
       {/* MAIN */}
-      <div style={{flex:1,padding:14,overflowY:"auto"}}>
+      <div style={{flex:1,padding:14,paddingBottom:200,overflowY:"auto"}}>
         {st==="loading"&&<div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:300,gap:12}}><div style={{width:28,height:28,border:`3px solid ${P.violet}`,borderTopColor:"transparent",borderRadius:"50%",animation:"spin .7s linear infinite"}}/><span style={{fontFamily:Fs,fontSize:13,color:P.ash}}>{mkt==="crypto"?"OKX":"Yahoo"}'den veri çekiliyor...</span></div>}
+        {sigOn&&sig&&mkt==="crypto"&&<SignalCard sig={sig} sym={sym} tf={tf}/>}
         {s&&st==="done"&&<>
           <div style={{display:"flex",flexWrap:"wrap",gap:7,marginBottom:12}}>
             <Stat l="Bakiye" v={s.fE} pre="$" color={rc}/><Stat l="Getiri" v={s.ret} suf="%" color={rc} pre={s.ret>=0?"+":""}/><Stat l="Kazanma" v={s.wr} suf="%" color={s.wr>=50?P.jade:P.danger}/><Stat l="Maks DD" v={s.mDD} suf="%" color={P.danger} pre="-"/><Stat l="PF" v={s.pf} color={s.pf>=1.5?P.jade:s.pf>=1?P.ember:P.danger}/><Stat l="Trade" v={s.cnt} color={P.cobalt}/><Stat l="Ort.Kat" v={s.aLy} color={P.violet}/>{s.oL>0&&<Stat l="⚠Açık" v={s.oL} color={P.ember}/>}
@@ -184,6 +532,8 @@ function App(){
         {st==="idle"&&<div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:300,gap:10}}><img src={LOGO} width="48" height="48" style={{borderRadius:12}}/><span style={{fontFamily:Fd,fontSize:22,color:P.white}}>Press <span style={{color:P.violet}}>RUN</span></span><span style={{fontFamily:Fs,fontSize:12,color:P.ash}}>Market, sembol ve zaman dilimi seçin</span></div>}
       </div>
     </div>
+    {/* PAPER TRADING PANEL */}
+    <PaperPanel engine={paperEng} setEngine={setPaperEng} syms={syms} cfg={cfg}/>
   </div>;
 }
 ReactDOM.render(React.createElement(App),document.getElementById('root'));
