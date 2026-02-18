@@ -212,114 +212,137 @@ function SignalCard({sig,sym,tf}){
   </div>;
 }
 
-// ═══ PAPER TRADING ENGINE v2 — Long/Short, Contract Size, Multi-Position ═══
+// ═══ PAPER TRADING ENGINE v3 — Futures: Leverage, R:R, SL/TP, Liq Price ═══
 function createPaperEngine(initialCap=10000){
   return{
-    cap:initialCap,cash:initialCap,
-    bots:{},
-    positions:[],// ALL open positions: {id,sym,side,qty,ep,contractUSD,time,layers:[]}
-    trades:[],// closed
-    nextId:1,
-    startTime:Date.now(),
+    cap:initialCap,cash:initialCap,peakEq:initialCap,
+    bots:{},positions:[],trades:[],nextId:1,startTime:Date.now(),
+    // Global settings set at start
+    leverage:5,rr:2,riskPct:2,contractUSD:200,
     getStats(){
       const w=this.trades.filter(t=>t.pnl>0),lo=this.trades.filter(t=>t.pnl<=0);
       const realized=this.trades.reduce((s,t)=>s+t.pnl,0);
-      let unrealized=0,posValue=0;
+      let unrealized=0;
       this.positions.forEach(p=>{
         const lp=this.bots[p.sym]?.lastPrice||p.ep;
         const uPnl=p.side==="LONG"?(lp-p.ep)*p.qty:(p.ep-lp)*p.qty;
-        unrealized+=uPnl;posValue+=p.qty*lp;
+        unrealized+=uPnl;
       });
+      const equity=this.cash+this.positions.reduce((s,p)=>s+p.margin,0)+unrealized;
+      if(equity>this.peakEq)this.peakEq=equity;
+      const dd=this.peakEq>0?+((this.peakEq-equity)/this.peakEq*100).toFixed(2):0;
       return{
-        equity:+(this.cash+posValue).toFixed(2),cash:+this.cash.toFixed(2),
+        equity:+equity.toFixed(2),cash:+this.cash.toFixed(2),
         realized:+realized.toFixed(2),unrealized:+unrealized.toFixed(2),
         totalTrades:this.trades.length,openCount:this.positions.length,
         winRate:this.trades.length?+(w.length/this.trades.length*100).toFixed(1):0,
-        wins:w.length,losses:lo.length,
-        activeBots:Object.keys(this.bots).filter(k=>this.bots[k].active).length,
+        wins:w.length,losses:lo.length,maxDD:dd,
         longCount:this.positions.filter(p=>p.side==="LONG").length,
         shortCount:this.positions.filter(p=>p.side==="SHORT").length,
+        avgRR:w.length&&lo.length?+((w.reduce((s,t)=>s+t.pnl,0)/w.length)/Math.abs(lo.reduce((s,t)=>s+t.pnl,0)/lo.length)).toFixed(2):0,
       };
     },
     tick(sym,price){
       const b=this.bots[sym];
       if(!b||!b.active)return null;
       b.lastPrice=price;
-      const{cfg}=b;
-      const fA=cfg.mA||80;
-      const fT=cfg.mP||40;
-      const cSize=cfg.contractUSD||200;
       const events=[];
-      // Get open positions for this sym
+      const lev=this.leverage;
+      const rr=this.rr;
+      const cUSD=this.contractUSD;
+      const riskPct=this.riskPct;
+
+      // ── Check SL / TP / Liquidation on open positions ──
       const symPos=this.positions.filter(p=>p.sym===sym);
-      const longs=symPos.filter(p=>p.side==="LONG");
-      const shorts=symPos.filter(p=>p.side==="SHORT");
+      symPos.forEach(p=>{
+        const uPnl=p.side==="LONG"?(price-p.ep)*p.qty:(p.ep-price)*p.qty;
+        // Stop Loss hit
+        if(p.side==="LONG"&&price<=p.sl||p.side==="SHORT"&&price>=p.sl){
+          const pnl=p.side==="LONG"?(p.sl-p.ep)*p.qty:(p.ep-p.sl)*p.qty;
+          this.cash+=p.margin+pnl;
+          this.trades.push({sym,side:p.side,entry:+p.ep.toFixed(2),exit:+p.sl.toFixed(2),layers:p.layer,qty:+p.qty.toFixed(6),margin:p.margin,notional:p.notional,leverage:lev,sl:+p.sl.toFixed(2),tp:+p.tp.toFixed(2),pnl:+pnl.toFixed(2),pnlPct:+((pnl/p.margin)*100).toFixed(2),result:"SL",time:Date.now()});
+          events.push({type:"SL",side:p.side,sym,price:p.sl,pnl:+pnl.toFixed(2)});
+          this.positions=this.positions.filter(x=>x.id!==p.id);
+        }
+        // Take Profit hit
+        else if(p.side==="LONG"&&price>=p.tp||p.side==="SHORT"&&price<=p.tp){
+          const pnl=p.side==="LONG"?(p.tp-p.ep)*p.qty:(p.ep-p.tp)*p.qty;
+          this.cash+=p.margin+pnl;
+          this.trades.push({sym,side:p.side,entry:+p.ep.toFixed(2),exit:+p.tp.toFixed(2),layers:p.layer,qty:+p.qty.toFixed(6),margin:p.margin,notional:p.notional,leverage:lev,sl:+p.sl.toFixed(2),tp:+p.tp.toFixed(2),pnl:+pnl.toFixed(2),pnlPct:+((pnl/p.margin)*100).toFixed(2),result:"TP",time:Date.now()});
+          events.push({type:"TP",side:p.side,sym,price:p.tp,pnl:+pnl.toFixed(2)});
+          this.positions=this.positions.filter(x=>x.id!==p.id);
+        }
+        // Liquidation check (margin wiped out)
+        else if(p.side==="LONG"&&price<=p.liq||p.side==="SHORT"&&price>=p.liq){
+          const pnl=-p.margin;// lose entire margin
+          this.trades.push({sym,side:p.side,entry:+p.ep.toFixed(2),exit:+price.toFixed(2),layers:p.layer,qty:+p.qty.toFixed(6),margin:p.margin,notional:p.notional,leverage:lev,sl:+p.sl.toFixed(2),tp:+p.tp.toFixed(2),pnl:+pnl.toFixed(2),pnlPct:-100,result:"LIQ",time:Date.now()});
+          events.push({type:"LIQ",side:p.side,sym,price,pnl:+pnl.toFixed(2)});
+          this.positions=this.positions.filter(x=>x.id!==p.id);
+        }
+      });
 
-      // ── LONG LOGIC: Martingale layers ──
-      if(!longs.length){
-        // Open Layer 1 Long if cash allows
-        if(this.cash>=cSize){
-          const qty=cSize/price;
-          const pos={id:this.nextId++,sym,side:"LONG",qty,ep:price,contractUSD:cSize,time:Date.now(),layer:1};
-          this.positions.push(pos);this.cash-=cSize;
-          events.push({type:"OPEN",side:"LONG",sym,layer:1,price,size:cSize,qty:+qty.toFixed(6)});
+      // ── Entry logic — Martingale Long layers ──
+      const curLongs=this.positions.filter(p=>p.sym===sym&&p.side==="LONG");
+      const curShorts=this.positions.filter(p=>p.sym===sym&&p.side==="SHORT");
+      const fA=b.cfg.mA||80;
+
+      // Calculate risk amount and SL/TP distances
+      const equity=this.cash+this.positions.reduce((s,p)=>s+p.margin,0);
+      const riskAmt=equity*(riskPct/100);// max $ risk per trade
+      const margin=cUSD;// margin = contract size
+      const notional=margin*lev;// total position value
+      const qty=notional/price;// coin amount
+      // SL distance: risk / qty  (so loss at SL = riskAmt)
+      const slDist=riskAmt/qty;
+      const tpDist=slDist*rr;// TP = SL × R:R
+
+      // LONG entry
+      if(!curLongs.length){
+        if(this.cash>=margin){
+          const ep=price;
+          const sl=+(ep-slDist).toFixed(4);
+          const tp=+(ep+tpDist).toFixed(4);
+          const liq=+(ep-ep/lev*0.9).toFixed(4);// ~90% of margin
+          this.positions.push({id:this.nextId++,sym,side:"LONG",qty,ep,margin,notional,sl,tp,liq,layer:1,time:Date.now()});
+          this.cash-=margin;
+          events.push({type:"OPEN",side:"LONG",sym,layer:1,price:ep,margin,notional:+notional.toFixed(0),qty:+qty.toFixed(6),sl,tp,liq,lev});
         }
-      }else if(longs.length<5){
-        const lastEp=longs[longs.length-1].ep;
-        if(price<lastEp-fA&&this.cash>=cSize){
-          const ly=longs.length+1;
-          const qty=cSize/price;
-          this.positions.push({id:this.nextId++,sym,side:"LONG",qty,ep:price,contractUSD:cSize,time:Date.now(),layer:ly});
-          this.cash-=cSize;
-          events.push({type:"OPEN",side:"LONG",sym,layer:ly,price,size:cSize,qty:+qty.toFixed(6)});
-        }
-      }
-      // Long TP check
-      if(longs.length>0){
-        const tQ=longs.reduce((s,p)=>s+p.qty,0);
-        const tC=longs.reduce((s,p)=>s+p.qty*p.ep,0);
-        const avgP=tC/tQ;
-        if(price>=avgP+fT){
-          const exitVal=tQ*price;
-          const pnl=exitVal-tC;
-          this.cash+=exitVal;
-          this.trades.push({sym,side:"LONG",entry:+avgP.toFixed(2),exit:+price.toFixed(2),layers:longs.length,qty:+tQ.toFixed(6),contractUSD:longs.reduce((s,p)=>s+p.contractUSD,0),pnl:+pnl.toFixed(2),pnlPct:+((pnl/tC)*100).toFixed(2),time:Date.now()});
-          events.push({type:"CLOSE",side:"LONG",sym,layers:longs.length,price,pnl:+pnl.toFixed(2)});
-          this.positions=this.positions.filter(p=>!(p.sym===sym&&p.side==="LONG"));
+      }else if(curLongs.length<5){
+        const lastEp=curLongs[curLongs.length-1].ep;
+        if(price<lastEp-fA&&this.cash>=margin){
+          const ly=curLongs.length+1;
+          const ep=price;
+          const sl=+(ep-slDist).toFixed(4);
+          const tp=+(ep+tpDist).toFixed(4);
+          const liq=+(ep-ep/lev*0.9).toFixed(4);
+          this.positions.push({id:this.nextId++,sym,side:"LONG",qty,ep,margin,notional,sl,tp,liq,layer:ly,time:Date.now()});
+          this.cash-=margin;
+          events.push({type:"OPEN",side:"LONG",sym,layer:ly,price:ep,margin,notional:+notional.toFixed(0),qty:+qty.toFixed(6),sl,tp,liq,lev});
         }
       }
 
-      // ── SHORT LOGIC: Reverse Martingale ──
-      if(!shorts.length){
-        if(price>b.basePrice*(1+fA/b.basePrice)&&this.cash>=cSize){
-          const qty=cSize/price;
-          this.positions.push({id:this.nextId++,sym,side:"SHORT",qty,ep:price,contractUSD:cSize,time:Date.now(),layer:1});
-          this.cash-=cSize;// margin
-          events.push({type:"OPEN",side:"SHORT",sym,layer:1,price,size:cSize,qty:+qty.toFixed(6)});
+      // SHORT entry
+      if(!curShorts.length){
+        if(b.basePrice&&price>b.basePrice*(1+fA/b.basePrice)&&this.cash>=margin){
+          const ep=price;
+          const sl=+(ep+slDist).toFixed(4);
+          const tp=+(ep-tpDist).toFixed(4);
+          const liq=+(ep+ep/lev*0.9).toFixed(4);
+          this.positions.push({id:this.nextId++,sym,side:"SHORT",qty,ep,margin,notional,sl,tp,liq,layer:1,time:Date.now()});
+          this.cash-=margin;
+          events.push({type:"OPEN",side:"SHORT",sym,layer:1,price:ep,margin,notional:+notional.toFixed(0),qty:+qty.toFixed(6),sl,tp,liq,lev});
         }
-      }else if(shorts.length<3){
-        const lastEp=shorts[shorts.length-1].ep;
-        if(price>lastEp+fA&&this.cash>=cSize){
-          const ly=shorts.length+1;
-          const qty=cSize/price;
-          this.positions.push({id:this.nextId++,sym,side:"SHORT",qty,ep:price,contractUSD:cSize,time:Date.now(),layer:ly});
-          this.cash-=cSize;
-          events.push({type:"OPEN",side:"SHORT",sym,layer:ly,price,size:cSize,qty:+qty.toFixed(6)});
-        }
-      }
-      // Short TP check
-      if(shorts.length>0){
-        const tQ=shorts.reduce((s,p)=>s+p.qty,0);
-        const tC=shorts.reduce((s,p)=>s+p.qty*p.ep,0);
-        const avgP=tC/tQ;
-        if(price<=avgP-fT){
-          const costBasis=tC;
-          const exitCost=tQ*price;
-          const pnl=costBasis-exitCost;
-          this.cash+=shorts.reduce((s,p)=>s+p.contractUSD,0)+pnl;// return margin + profit
-          this.trades.push({sym,side:"SHORT",entry:+avgP.toFixed(2),exit:+price.toFixed(2),layers:shorts.length,qty:+tQ.toFixed(6),contractUSD:shorts.reduce((s,p)=>s+p.contractUSD,0),pnl:+pnl.toFixed(2),pnlPct:+((pnl/costBasis)*100).toFixed(2),time:Date.now()});
-          events.push({type:"CLOSE",side:"SHORT",sym,layers:shorts.length,price,pnl:+pnl.toFixed(2)});
-          this.positions=this.positions.filter(p=>!(p.sym===sym&&p.side==="SHORT"));
+      }else if(curShorts.length<3){
+        const lastEp=curShorts[curShorts.length-1].ep;
+        if(price>lastEp+fA&&this.cash>=margin){
+          const ly=curShorts.length+1;
+          const ep=price;
+          const sl=+(ep+slDist).toFixed(4);
+          const tp=+(ep-tpDist).toFixed(4);
+          const liq=+(ep+ep/lev*0.9).toFixed(4);
+          this.positions.push({id:this.nextId++,sym,side:"SHORT",qty,ep,margin,notional,sl,tp,liq,layer:ly,time:Date.now()});
+          this.cash-=margin;
+          events.push({type:"OPEN",side:"SHORT",sym,layer:ly,price:ep,margin,notional:+notional.toFixed(0),qty:+qty.toFixed(6),sl,tp,liq,lev});
         }
       }
       return events.length?events:null;
@@ -327,13 +350,16 @@ function createPaperEngine(initialCap=10000){
   };
 }
 
-// ═══ PAPER TRADING PANEL v2 ═══
+// ═══ PAPER TRADING PANEL v3 — Futures Settings ═══
 function PaperPanel({engine,setEngine,syms,cfg}){
   const[selected,setSelected]=useState([]);
   const[running,setRunning]=useState(false);
   const[expanded,setExpanded]=useState(true);
   const[logs,setLogs]=useState([]);
   const[cSize,setCSize]=useState(200);
+  const[lev,setLev]=useState(5);
+  const[rr,setRR]=useState(2);
+  const[riskPct,setRiskPct]=useState(2);
   const wsRefs=useRef({});
   const engineRef=useRef(engine);
   engineRef.current=engine;
@@ -344,13 +370,13 @@ function PaperPanel({engine,setEngine,syms,cfg}){
   const start=()=>{
     if(!selected.length)return;
     const eng=createPaperEngine(10000);
+    eng.leverage=lev;eng.rr=rr;eng.riskPct=riskPct;eng.contractUSD=cSize;
     const mA=cfg?.smartDefaults?.OTHER?.aptr?.[1]||80;
-    const mP=cfg?.smartDefaults?.OTHER?.profit?.[1]||40;
     selected.forEach(sym=>{
-      eng.bots[sym]={positions:[],cfg:{al:[10,15,20,25,30],mA,mP,contractUSD:cSize},active:true,lastPrice:null,basePrice:null};
+      eng.bots[sym]={cfg:{mA},active:true,lastPrice:null,basePrice:null};
     });
     setEngine(eng);setRunning(true);
-    setLogs([{t:Date.now(),msg:`🚀 Başlatıldı — $10,000 — ${selected.length} coin — Kontrat: $${cSize}`}]);
+    setLogs([{t:Date.now(),msg:`🚀 Futures Paper — $10K — ${lev}x — R:R 1:${rr} — Risk %${riskPct} — $${cSize}/poz — ${selected.length} coin`}]);
 
     Object.keys(wsRefs.current).forEach(k=>{try{wsRefs.current[k].close();}catch(e){}});
     wsRefs.current={};
@@ -365,15 +391,20 @@ function PaperPanel({engine,setEngine,syms,cfg}){
             const px=+parseFloat(d.data[0].px);
             if(!engineRef.current)return;
             const bot=engineRef.current.bots[sym];
-            if(bot&&!bot.basePrice)bot.basePrice=px;// set base price on first tick
+            if(bot&&!bot.basePrice)bot.basePrice=px;
             const evts=engineRef.current.tick(sym,px);
             if(evts){
               setLogs(prev=>[...evts.map(ev=>{
-                const arrow=ev.side==="LONG"?"🟢":"🔴";
-                const dir=ev.side==="LONG"?"LONG":"SHORT";
-                if(ev.type==="OPEN")return{t:Date.now(),msg:`${arrow} ${dir} ${ev.sym.replace("-USDT","")} K${ev.layer} — $${ev.price.toFixed(2)} — ${ev.qty} adet — $${ev.size}`};
-                return{t:Date.now(),msg:`${ev.pnl>=0?"✅":"❌"} KAPAT ${dir} ${ev.sym.replace("-USDT","")} (${ev.layers}K) — $${ev.price.toFixed(2)} — ${ev.pnl>=0?"+":""}$${ev.pnl}`};
-              }),...prev].slice(0,80));
+                const cn=ev.sym.replace("-USDT","");
+                if(ev.type==="OPEN"){
+                  const ico=ev.side==="LONG"?"🟢":"🔴";
+                  return{t:Date.now(),msg:`${ico} ${ev.side} ${cn} K${ev.layer} | ${ev.lev}x | Giriş:$${ev.price.toFixed(2)} | Margin:$${ev.margin} | Pozisyon:$${ev.notional} | SL:$${ev.sl} TP:$${ev.tp}`};
+                }
+                if(ev.type==="TP")return{t:Date.now(),msg:`✅ TP ${ev.side} ${cn} — $${ev.price.toFixed(2)} — +$${ev.pnl}`};
+                if(ev.type==="SL")return{t:Date.now(),msg:`⛔ SL ${ev.side} ${cn} — $${ev.price.toFixed(2)} — $${ev.pnl}`};
+                if(ev.type==="LIQ")return{t:Date.now(),msg:`💀 LIQ ${ev.side} ${cn} — $${ev.price.toFixed(2)} — Margin kaybedildi: $${Math.abs(ev.pnl)}`};
+                return{t:Date.now(),msg:JSON.stringify(ev)};
+              }),...prev].slice(0,100));
               setEngine({...engineRef.current});
             }
           }catch(err){}
@@ -396,19 +427,22 @@ function PaperPanel({engine,setEngine,syms,cfg}){
   const eq=stats?.equity||10000;
   const ret=stats?((eq-10000)/10000*100):0;
 
+  const Btn=({v,cur,set,label})=><button onClick={()=>set(v)} style={{fontFamily:Fm,fontSize:10,fontWeight:600,padding:"4px 8px",borderRadius:5,background:cur===v?"rgba(123,92,245,0.15)":"transparent",border:`1px solid ${cur===v?P.violet:P.border}`,color:cur===v?P.violet:P.ash,cursor:"pointer"}}>{label||v}</button>;
+
   return <div style={{position:"fixed",bottom:0,left:0,right:0,zIndex:998,background:P.card,borderTop:`2px solid ${running?P.jade:P.border}`,boxShadow:"0 -8px 30px rgba(0,0,0,0.4)"}}>
     {/* Toggle Bar */}
     <div onClick={()=>setExpanded(!expanded)} style={{padding:"8px 18px",display:"flex",alignItems:"center",justifyContent:"space-between",cursor:"pointer",borderBottom:expanded?`1px solid ${P.border}`:"none"}}>
       <div style={{display:"flex",alignItems:"center",gap:8}}>
         <span style={{fontSize:16}}>{running?"📈":"💰"}</span>
-        <span style={{fontFamily:Fd,fontSize:16,color:P.white,fontWeight:700}}>Paper <span style={{color:P.violet}}>Trading</span></span>
+        <span style={{fontFamily:Fd,fontSize:16,color:P.white,fontWeight:700}}>Futures <span style={{color:P.violet}}>Paper</span></span>
         {running&&<div style={{width:8,height:8,borderRadius:4,background:P.jade,animation:"pulse 1.5s infinite"}}/>}
         {running&&stats&&<span style={{fontFamily:Fm,fontSize:12,color:ret>=0?P.jade:P.danger,fontWeight:600,marginLeft:8}}>${eq.toLocaleString("en")} ({ret>=0?"+":""}{ret.toFixed(2)}%)</span>}
       </div>
-      <div style={{display:"flex",alignItems:"center",gap:10}}>
+      <div style={{display:"flex",alignItems:"center",gap:8}}>
         {running&&stats&&<>
-          <span style={{fontFamily:Fm,fontSize:10,color:P.ash}}>İşlem: {stats.totalTrades}</span>
-          <span style={{fontFamily:Fm,fontSize:10,color:P.ash}}>WR: {stats.winRate}%</span>
+          <span style={{fontFamily:Fm,fontSize:10,color:P.ash}}>{engine?.leverage}x</span>
+          <span style={{fontFamily:Fm,fontSize:10,color:P.ash}}>R:R 1:{engine?.rr}</span>
+          <span style={{fontFamily:Fm,fontSize:10,color:P.ash}}>WR:{stats.winRate}%</span>
           <span style={{fontFamily:Fm,fontSize:10,color:P.jade}}>L:{stats.longCount}</span>
           <span style={{fontFamily:Fm,fontSize:10,color:P.danger}}>S:{stats.shortCount}</span>
         </>}
@@ -416,90 +450,102 @@ function PaperPanel({engine,setEngine,syms,cfg}){
       </div>
     </div>
 
-    {expanded&&<div style={{padding:"12px 18px",maxHeight:360,overflowY:"auto"}}>
+    {expanded&&<div style={{padding:"12px 18px",maxHeight:380,overflowY:"auto"}}>
       {!running?<>
-        <div style={{fontFamily:Fm,fontSize:10,color:P.violet,letterSpacing:"0.12em",marginBottom:8,fontWeight:600}}>PAPER TRADE — COİN & KONTRAT</div>
+        <div style={{fontFamily:Fm,fontSize:10,color:P.violet,letterSpacing:"0.12em",marginBottom:10,fontWeight:600}}>FUTURES PAPER TRADE — AYARLAR</div>
+        {/* Settings Row */}
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:8,marginBottom:10}}>
+          <div><div style={{fontFamily:Fm,fontSize:9,color:P.ash,marginBottom:4}}>⚡ Kaldıraç</div><div style={{display:"flex",gap:3}}>{[1,2,3,5,10,20].map(v=><Btn key={v} v={v} cur={lev} set={setLev} label={v+"x"}/>)}</div></div>
+          <div><div style={{fontFamily:Fm,fontSize:9,color:P.ash,marginBottom:4}}>🎯 Risk : Reward</div><div style={{display:"flex",gap:3}}>{[1,1.5,2,3,5].map(v=><Btn key={v} v={v} cur={rr} set={setRR} label={"1:"+v}/>)}</div></div>
+          <div><div style={{fontFamily:Fm,fontSize:9,color:P.ash,marginBottom:4}}>🛡️ Risk / İşlem</div><div style={{display:"flex",gap:3}}>{[1,2,3,5].map(v=><Btn key={v} v={v} cur={riskPct} set={setRiskPct} label={"%"+v}/>)}</div></div>
+          <div><div style={{fontFamily:Fm,fontSize:9,color:P.ash,marginBottom:4}}>📐 Margin / Poz.</div><div style={{display:"flex",gap:3}}>{[50,100,200,500,1000].map(v=><Btn key={v} v={v} cur={cSize} set={setCSize} label={"$"+v}/>)}</div></div>
+        </div>
+        {/* Calculated Info */}
+        <div style={{background:P.surface,borderRadius:8,padding:"8px 12px",marginBottom:10,display:"flex",gap:16,flexWrap:"wrap",fontFamily:Fm,fontSize:11}}>
+          <span style={{color:P.ash}}>Pozisyon değeri: <span style={{color:P.white,fontWeight:600}}>${(cSize*lev).toLocaleString("en")}</span></span>
+          <span style={{color:P.ash}}>Risk/trade: <span style={{color:P.ember,fontWeight:600}}>${(10000*riskPct/100).toFixed(0)}</span></span>
+          <span style={{color:P.ash}}>TP hedefi: <span style={{color:P.jade,fontWeight:600}}>${(10000*riskPct/100*rr).toFixed(0)}</span></span>
+          <span style={{color:P.ash}}>Liq mesafe: <span style={{color:P.danger,fontWeight:600}}>~%{(100/lev*0.9).toFixed(1)}</span></span>
+        </div>
+        {/* Coin Selection */}
+        <div style={{fontFamily:Fm,fontSize:9,color:P.ash,marginBottom:4}}>Coin Seç:</div>
         <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:10}}>
           {topCoins.map(s=><button key={s} onClick={()=>toggleCoin(s)} style={{fontFamily:Fm,fontSize:10,fontWeight:600,padding:"5px 10px",borderRadius:6,background:selected.includes(s)?"rgba(123,92,245,0.15)":"transparent",border:`1px solid ${selected.includes(s)?P.violet:P.border}`,color:selected.includes(s)?P.violet:P.ash,cursor:"pointer"}}>{s.replace("-USDT","")}</button>)}
         </div>
-        <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:10,flexWrap:"wrap"}}>
-          <div style={{display:"flex",alignItems:"center",gap:6}}>
-            <span style={{fontFamily:Fm,fontSize:11,color:P.ash}}>Kontrat:</span>
-            {[50,100,200,500,1000].map(v=><button key={v} onClick={()=>setCSize(v)} style={{fontFamily:Fm,fontSize:10,fontWeight:600,padding:"4px 8px",borderRadius:5,background:cSize===v?"rgba(123,92,245,0.15)":"transparent",border:`1px solid ${cSize===v?P.violet:P.border}`,color:cSize===v?P.violet:P.ash,cursor:"pointer"}}>${v}</button>)}
-          </div>
-          <span style={{fontFamily:Fm,fontSize:10,color:P.ash}}>Maks: {Math.floor(10000/cSize)} eş zamanlı pozisyon</span>
-        </div>
-        <div style={{display:"flex",alignItems:"center",gap:10}}>
-          <button onClick={start} disabled={!selected.length} style={{fontFamily:Fs,fontSize:12,fontWeight:700,padding:"9px 24px",borderRadius:10,background:selected.length?`linear-gradient(135deg,${P.jade},#1a9d5c)`:"#2A2D3A",border:"none",color:P.white,cursor:selected.length?"pointer":"not-allowed",boxShadow:selected.length?`0 4px 16px ${P.jade}40`:"none"}}>🚀 Başlat ({selected.length} coin × ${cSize})</button>
-          <span style={{fontFamily:Fm,fontSize:10,color:P.ash}}>$10K • Long + Short • Martingale</span>
-        </div>
+        <button onClick={start} disabled={!selected.length} style={{fontFamily:Fs,fontSize:12,fontWeight:700,padding:"9px 24px",borderRadius:10,background:selected.length?`linear-gradient(135deg,${P.jade},#1a9d5c)`:"#2A2D3A",border:"none",color:P.white,cursor:selected.length?"pointer":"not-allowed",boxShadow:selected.length?`0 4px 16px ${P.jade}40`:"none"}}>🚀 Başlat — {selected.length} coin × {lev}x × ${cSize}</button>
       </>:<>
-        {/* Stats Grid */}
-        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(90px,1fr))",gap:4,marginBottom:10}}>
+        {/* Stats */}
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(85px,1fr))",gap:4,marginBottom:8}}>
           {[
             ["BAKİYE","$"+eq.toLocaleString("en"),ret>=0?P.jade:P.danger],
-            ["NAKİT","$"+(stats?.cash||0).toLocaleString("en"),P.mist],
             ["REALIZED",(stats?.realized>=0?"+":"")+stats?.realized,stats?.realized>=0?P.jade:P.danger],
             ["UNREALIZED",(stats?.unrealized>=0?"+":"")+(stats?.unrealized||0).toFixed(2),stats?.unrealized>=0?P.jade:P.danger],
-            ["W / L",(stats?.wins||0)+" / "+(stats?.losses||0),P.mist],
             ["WIN RATE",(stats?.winRate||0)+"%",stats?.winRate>=50?P.jade:P.danger],
+            ["W / L",(stats?.wins||0)+" / "+(stats?.losses||0),P.mist],
+            ["MAX DD",(stats?.maxDD||0)+"%",P.danger],
             ["LONG",stats?.longCount||0,P.jade],
             ["SHORT",stats?.shortCount||0,P.danger],
-          ].map(([l,v,c],i)=><div key={i} style={{background:P.surface,borderRadius:7,padding:"6px 8px"}}><div style={{fontFamily:Fm,fontSize:7,color:P.ash,letterSpacing:"0.08em",marginBottom:1}}>{l}</div><div style={{fontFamily:Fm,fontSize:12,fontWeight:600,color:c}}>{v}</div></div>)}
+          ].map(([l,v,c],i)=><div key={i} style={{background:P.surface,borderRadius:6,padding:"5px 7px"}}><div style={{fontFamily:Fm,fontSize:7,color:P.ash,letterSpacing:"0.08em"}}>{l}</div><div style={{fontFamily:Fm,fontSize:12,fontWeight:600,color:c}}>{v}</div></div>)}
         </div>
 
-        {/* Open Positions Table */}
-        {engine?.positions?.length>0&&<div style={{marginBottom:8}}>
-          <div style={{fontFamily:Fm,fontSize:9,color:P.ember,letterSpacing:"0.1em",marginBottom:4,fontWeight:600}}>AÇIK POZİSYONLAR ({engine.positions.length})</div>
-          <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontFamily:Fm,fontSize:10}}>
-            <thead><tr>{["#","Coin","Yön","Giriş","Şimdi","Kontrat","Adet","K/Z","K/Z %"].map(h=><th key={h} style={{textAlign:"left",padding:"4px 6px",color:P.ash,fontSize:9,borderBottom:`1px solid ${P.border}`}}>{h}</th>)}</tr></thead>
+        {/* Open Positions */}
+        {engine?.positions?.length>0&&<div style={{marginBottom:6}}>
+          <div style={{fontFamily:Fm,fontSize:9,color:P.ember,letterSpacing:"0.1em",marginBottom:3,fontWeight:600}}>AÇIK POZİSYONLAR ({engine.positions.length})</div>
+          <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontFamily:Fm,fontSize:9}}>
+            <thead><tr>{["#","Coin","Yön","Giriş","Şimdi","Margin","Poz. Değeri","Kaldıraç","SL","TP","Liq","K/Z","K/Z %"].map(h=><th key={h} style={{textAlign:"left",padding:"3px 5px",color:P.ash,fontSize:8,borderBottom:`1px solid ${P.border}`,whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead>
             <tbody>{engine.positions.map(p=>{
               const lp=engine.bots[p.sym]?.lastPrice||p.ep;
               const uPnl=p.side==="LONG"?(lp-p.ep)*p.qty:(p.ep-lp)*p.qty;
-              const uPct=((uPnl/p.contractUSD)*100);
+              const uPct=((uPnl/p.margin)*100);
+              const slDist=Math.abs((p.sl-p.ep)/p.ep*100);
+              const tpDist=Math.abs((p.tp-p.ep)/p.ep*100);
               return <tr key={p.id} style={{borderBottom:`1px solid ${P.border}`}}>
-                <td style={{padding:"3px 6px",color:P.ash}}>{p.id}</td>
-                <td style={{padding:"3px 6px",color:P.white,fontWeight:600}}>{p.sym.replace("-USDT","")}</td>
-                <td style={{padding:"3px 6px"}}><span style={{background:p.side==="LONG"?P.jade+"20":P.danger+"20",color:p.side==="LONG"?P.jade:P.danger,padding:"1px 6px",borderRadius:4,fontWeight:700,fontSize:9}}>{p.side}</span></td>
-                <td style={{padding:"3px 6px"}}>${p.ep.toFixed(2)}</td>
-                <td style={{padding:"3px 6px"}}>${lp.toFixed(2)}</td>
-                <td style={{padding:"3px 6px",color:P.violet}}>${p.contractUSD}</td>
-                <td style={{padding:"3px 6px"}}>{p.qty.toFixed(4)}</td>
-                <td style={{padding:"3px 6px",color:uPnl>=0?P.jade:P.danger,fontWeight:600}}>{uPnl>=0?"+":""}{uPnl.toFixed(2)}</td>
-                <td style={{padding:"3px 6px",color:uPnl>=0?P.jade:P.danger}}>{uPct>=0?"+":""}{uPct.toFixed(2)}%</td>
+                <td style={{padding:"2px 5px",color:P.ash}}>{p.id}</td>
+                <td style={{padding:"2px 5px",color:P.white,fontWeight:600}}>{p.sym.replace("-USDT","")}</td>
+                <td style={{padding:"2px 5px"}}><span style={{background:p.side==="LONG"?P.jade+"20":P.danger+"20",color:p.side==="LONG"?P.jade:P.danger,padding:"1px 5px",borderRadius:3,fontWeight:700,fontSize:8}}>{p.side}</span></td>
+                <td style={{padding:"2px 5px"}}>${p.ep.toFixed(2)}</td>
+                <td style={{padding:"2px 5px",fontWeight:600}}>${lp.toFixed(2)}</td>
+                <td style={{padding:"2px 5px",color:P.violet}}>${p.margin}</td>
+                <td style={{padding:"2px 5px",color:P.cobalt}}>${p.notional.toFixed(0)}</td>
+                <td style={{padding:"2px 5px",color:P.ember}}>{engine.leverage}x</td>
+                <td style={{padding:"2px 5px",color:P.danger}}>${p.sl.toFixed(2)}</td>
+                <td style={{padding:"2px 5px",color:P.jade}}>${p.tp.toFixed(2)}</td>
+                <td style={{padding:"2px 5px",color:"#F59E0B"}}>${p.liq.toFixed(2)}</td>
+                <td style={{padding:"2px 5px",color:uPnl>=0?P.jade:P.danger,fontWeight:600}}>{uPnl>=0?"+":""}{uPnl.toFixed(2)}</td>
+                <td style={{padding:"2px 5px",color:uPnl>=0?P.jade:P.danger}}>{uPct>=0?"+":""}{uPct.toFixed(1)}%</td>
               </tr>;
             })}</tbody>
           </table></div>
         </div>}
 
         {/* Closed Trades */}
-        {engine?.trades?.length>0&&<div style={{marginBottom:8}}>
-          <div style={{fontFamily:Fm,fontSize:9,color:P.violet,letterSpacing:"0.1em",marginBottom:4,fontWeight:600}}>KAPANMIŞ İŞLEMLER ({engine.trades.length})</div>
-          <div style={{overflowX:"auto",maxHeight:80,overflowY:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontFamily:Fm,fontSize:10}}>
-            <thead><tr>{["Coin","Yön","Giriş","Çıkış","Katman","Kontrat","K/Z","K/Z %"].map(h=><th key={h} style={{textAlign:"left",padding:"3px 6px",color:P.ash,fontSize:9,borderBottom:`1px solid ${P.border}`,position:"sticky",top:0,background:P.card}}>{h}</th>)}</tr></thead>
+        {engine?.trades?.length>0&&<div style={{marginBottom:6}}>
+          <div style={{fontFamily:Fm,fontSize:9,color:P.violet,letterSpacing:"0.1em",marginBottom:3,fontWeight:600}}>KAPANMIŞ ({engine.trades.length})</div>
+          <div style={{overflowX:"auto",maxHeight:70,overflowY:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontFamily:Fm,fontSize:9}}>
+            <thead><tr>{["Coin","Yön","Giriş","Çıkış","Kaldıraç","Sonuç","K/Z","ROI %"].map(h=><th key={h} style={{textAlign:"left",padding:"2px 5px",color:P.ash,fontSize:8,borderBottom:`1px solid ${P.border}`,position:"sticky",top:0,background:P.card,whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead>
             <tbody>{[...engine.trades].reverse().map((t,i)=><tr key={i} style={{borderBottom:`1px solid ${P.border}`}}>
-              <td style={{padding:"2px 6px",color:P.white,fontWeight:600}}>{t.sym.replace("-USDT","")}</td>
-              <td style={{padding:"2px 6px"}}><span style={{background:t.side==="LONG"?P.jade+"20":P.danger+"20",color:t.side==="LONG"?P.jade:P.danger,padding:"1px 5px",borderRadius:3,fontWeight:700,fontSize:9}}>{t.side}</span></td>
-              <td style={{padding:"2px 6px"}}>${t.entry}</td>
-              <td style={{padding:"2px 6px"}}>${t.exit}</td>
-              <td style={{padding:"2px 6px"}}>{t.layers}</td>
-              <td style={{padding:"2px 6px",color:P.violet}}>${t.contractUSD}</td>
-              <td style={{padding:"2px 6px",color:t.pnl>=0?P.jade:P.danger,fontWeight:600}}>{t.pnl>=0?"+":""}${t.pnl}</td>
-              <td style={{padding:"2px 6px",color:t.pnl>=0?P.jade:P.danger}}>{t.pnlPct>=0?"+":""}{t.pnlPct}%</td>
+              <td style={{padding:"2px 5px",color:P.white,fontWeight:600}}>{t.sym.replace("-USDT","")}</td>
+              <td style={{padding:"2px 5px"}}><span style={{background:t.side==="LONG"?P.jade+"20":P.danger+"20",color:t.side==="LONG"?P.jade:P.danger,padding:"1px 4px",borderRadius:3,fontWeight:700,fontSize:8}}>{t.side}</span></td>
+              <td style={{padding:"2px 5px"}}>${t.entry}</td>
+              <td style={{padding:"2px 5px"}}>${t.exit}</td>
+              <td style={{padding:"2px 5px",color:P.ember}}>{t.leverage}x</td>
+              <td style={{padding:"2px 5px"}}><span style={{padding:"1px 5px",borderRadius:3,fontSize:8,fontWeight:700,background:t.result==="TP"?P.jade+"20":t.result==="SL"?P.danger+"20":"#F59E0B20",color:t.result==="TP"?P.jade:t.result==="SL"?P.danger:"#F59E0B"}}>{t.result}</span></td>
+              <td style={{padding:"2px 5px",color:t.pnl>=0?P.jade:P.danger,fontWeight:600}}>{t.pnl>=0?"+":""}${t.pnl}</td>
+              <td style={{padding:"2px 5px",color:t.pnl>=0?P.jade:P.danger}}>{t.pnlPct>=0?"+":""}{t.pnlPct}%</td>
             </tr>)}</tbody>
           </table></div>
         </div>}
 
         {/* Log + Stop */}
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
-          <span style={{fontFamily:Fm,fontSize:9,color:P.ash,letterSpacing:"0.1em"}}>LOG</span>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
+          <span style={{fontFamily:Fm,fontSize:8,color:P.ash}}>LOG</span>
           <button onClick={stop} style={{fontFamily:Fs,fontSize:10,fontWeight:600,padding:"4px 14px",borderRadius:6,background:"rgba(239,68,68,0.1)",border:"1px solid rgba(239,68,68,0.25)",color:P.danger,cursor:"pointer"}}>⏹ Durdur</button>
         </div>
-        <div style={{maxHeight:70,overflowY:"auto",background:P.surface,borderRadius:6,padding:4}}>
+        <div style={{maxHeight:60,overflowY:"auto",background:P.surface,borderRadius:6,padding:4}}>
           {logs.map((l,i)=><div key={i} style={{fontFamily:Fm,fontSize:9,color:P.mist,padding:"2px 4px",borderBottom:`1px solid ${P.border}`}}>
             <span style={{color:P.ash,marginRight:4}}>{new Date(l.t).toLocaleTimeString("tr-TR",{hour:"2-digit",minute:"2-digit",second:"2-digit"})}</span>{l.msg}
           </div>)}
-          {!logs.length&&<div style={{fontFamily:Fm,fontSize:10,color:P.ash,textAlign:"center",padding:6}}>Sinyal bekleniyor...</div>}
+          {!logs.length&&<div style={{fontFamily:Fm,fontSize:9,color:P.ash,textAlign:"center",padding:6}}>Sinyal bekleniyor...</div>}
         </div>
       </>}
     </div>}
