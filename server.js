@@ -25,6 +25,60 @@ function yahooFetch(url) {
   });
 }
 
+// ── OKX API Proxy ──
+app.get('/api/okx/candles/:instId', async (req, res) => {
+  try {
+    const { instId } = req.params;
+    const bar = req.query.bar || '1H';
+    const limit = req.query.limit || '300';
+    const url = `https://www.okx.com/api/v5/market/candles?instId=${encodeURIComponent(instId)}&bar=${bar}&limit=${limit}`;
+    const data = await yahooFetch(url);
+
+    if (data.code !== '0' || !data.data?.length) {
+      return res.status(404).json({ error: 'OKX: ' + (data.msg || 'No data') });
+    }
+
+    // OKX returns newest first, reverse for chronological order
+    // Format: [ts, o, h, l, c, vol, volCcy, volCcyQuote, confirm]
+    const candles = data.data.reverse().map(k => ({
+      time: Math.floor(+k[0] / 1000),
+      open: +k[1],
+      high: +k[2],
+      low: +k[3],
+      close: +k[4],
+      volume: +k[5],
+    })).filter(c => c.open && c.close);
+
+    res.json({ instId, candles });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// OKX instruments search (cached)
+let okxInstrumentsCache = null;
+let okxCacheTime = 0;
+app.get('/api/search/okx', async (req, res) => {
+  try {
+    const q = (req.query.q || '').toUpperCase();
+    if (q.length < 1) return res.json([]);
+
+    // Cache for 1 hour
+    if (!okxInstrumentsCache || Date.now() - okxCacheTime > 3600000) {
+      const data = await yahooFetch('https://www.okx.com/api/v5/public/instruments?instType=SPOT');
+      okxInstrumentsCache = (data.data || [])
+        .filter(i => i.instId.endsWith('-USDT') && i.state === 'live')
+        .map(i => ({ symbol: i.instId, base: i.baseCcy, name: i.baseCcy + '/USDT' }));
+      okxCacheTime = Date.now();
+    }
+
+    const results = okxInstrumentsCache
+      .filter(s => s.symbol.includes(q) || s.base.includes(q))
+      .slice(0, 15);
+    res.json(results);
+  } catch (e) { res.json([]); }
+});
+
 // Yahoo Finance OHLCV endpoint
 app.get('/api/yahoo/:symbol', async (req, res) => {
   try {
@@ -78,36 +132,6 @@ app.get('/api/search/yahoo', async (req, res) => {
         type: r.quoteType || '',
         exchange: r.exchange || '',
       }));
-    res.json(results);
-  } catch (e) { res.json([]); }
-});
-
-// Binance symbol search (from exchange info, cached)
-let binanceSymbolsCache = null;
-let binanceCacheTime = 0;
-app.get('/api/search/binance', async (req, res) => {
-  try {
-    const q = (req.query.q || '').toUpperCase();
-    if (q.length < 1) return res.json([]);
-
-    // Cache for 1 hour
-    if (!binanceSymbolsCache || Date.now() - binanceCacheTime > 3600000) {
-      const data = await new Promise((resolve, reject) => {
-        https.get('https://api.binance.com/api/v3/exchangeInfo', (r) => {
-          let d = '';
-          r.on('data', c => d += c);
-          r.on('end', () => { try { resolve(JSON.parse(d)); } catch(e) { reject(e); } });
-        }).on('error', reject);
-      });
-      binanceSymbolsCache = (data.symbols || [])
-        .filter(s => s.status === 'TRADING' && s.quoteAsset === 'USDT')
-        .map(s => ({ symbol: s.symbol, base: s.baseAsset, name: s.baseAsset + '/USDT' }));
-      binanceCacheTime = Date.now();
-    }
-
-    const results = binanceSymbolsCache
-      .filter(s => s.symbol.includes(q) || s.base.includes(q))
-      .slice(0, 15);
     res.json(results);
   } catch (e) { res.json([]); }
 });
