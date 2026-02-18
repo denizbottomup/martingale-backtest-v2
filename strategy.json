@@ -1,0 +1,65 @@
+{
+  "_comment": "BottomUP Martingale V2 — Pine Script Strateji Parametreleri",
+  "_instructions": "Bu dosyayı değiştirdiğinizde GitHub'a pushlayın. Railway otomatik deploy eder, HTML bu dosyayı okur.",
+  "_version": "2.1",
+  "_lastUpdate": "2026-02-19",
+
+  "defaults": {
+    "symbol": "ETHUSDT",
+    "timeframe": "1h",
+    "initialCapital": 10000,
+    "useManual": true,
+    "useEma": true,
+    "emaLength": 10,
+    "useRsi": false,
+    "rsiLevel": 71,
+    "atrLength": 14,
+    "profitDivisor": 2
+  },
+
+  "allocations": {
+    "_comment": "Pozisyon katmanlarına ayrılan equity yüzdeleri. Toplam 100 olmalı.",
+    "layer1": 10,
+    "layer2": 15,
+    "layer3": 20,
+    "layer4": 25,
+    "layer5": 30
+  },
+
+  "smartDefaults": {
+    "_comment": "Her sembol+timeframe için önerilen APTR ve Profit Target ($). [15m, 1h, 4h, 1d, 1w] sırasıyla.",
+    "BTC":    { "aptr": [200, 500, 1500, 3000, 6000],  "profit": [100, 250, 750, 1500, 3000] },
+    "ETH":    { "aptr": [10, 30, 80, 200, 500],         "profit": [5, 15, 40, 100, 250] },
+    "BNB":    { "aptr": [3, 8, 20, 50, 100],            "profit": [1.5, 4, 10, 25, 50] },
+    "MID":    { "aptr": [0.5, 2, 5, 15, 30],            "profit": [0.25, 1, 2.5, 7, 15] },
+    "LOW":    { "aptr": [0.002, 0.005, 0.015, 0.04, 0.1], "profit": [0.001, 0.0025, 0.007, 0.02, 0.05] },
+    "OTHER":  { "aptr": [1, 3, 10, 25, 60],             "profit": [0.5, 1.5, 5, 12, 30] }
+  },
+
+  "symbolGroups": {
+    "MID": ["SOLUSDT","AVAXUSDT","DOTUSDT","LINKUSDT","UNIUSDT","NEARUSDT","APTUSDT","INJUSDT","SUIUSDT","ATOMUSDT"],
+    "LOW": ["DOGEUSDT","PEPEUSDT","WIFUSDT","SEIUSDT","TRXUSDT","XRPUSDT","ADAUSDT"]
+  },
+
+  "symbols": [
+    "BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT","DOGEUSDT","ADAUSDT",
+    "AVAXUSDT","DOTUSDT","LINKUSDT","MATICUSDT","UNIUSDT","ATOMUSDT",
+    "NEARUSDT","LTCUSDT","APTUSDT","ARBUSDT","OPUSDT","SUIUSDT","SEIUSDT",
+    "INJUSDT","TIAUSDT","TONUSDT","PEPEUSDT","WIFUSDT","TRXUSDT"
+  ],
+
+  "timeframes": [
+    { "label": "15m", "value": "15m", "limit": 500 },
+    { "label": "1h",  "value": "1h",  "limit": 500 },
+    { "label": "4h",  "value": "4h",  "limit": 500 },
+    { "label": "1d",  "value": "1d",  "limit": 365 },
+    { "label": "1w",  "value": "1w",  "limit": 200 }
+  ],
+
+  "riskRules": {
+    "_comment": "Verdict hesaplama kuralları",
+    "viable":       { "returnMin": 0, "maxDDMax": 25, "profitFactorMin": 1.2 },
+    "risky":        { "returnMin": 0 },
+    "unprofitable": { "returnMax": 0 }
+  }
+}
