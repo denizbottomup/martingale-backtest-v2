@@ -1,192 +1,223 @@
-<!DOCTYPE html>
-<html lang="tr">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Martingale V2 — BottomUP</title>
-<link href="https://fonts.googleapis.com/css2?family=Cormorant+Display:wght@400;600;700&family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
-<style>
-*{margin:0;padding:0;box-sizing:border-box}html,body,#root{height:100%;width:100%}
-body{background:#13151C;color:#F3F4F6;font-family:'DM Sans',system-ui,sans-serif}
-::-webkit-scrollbar{width:5px}::-webkit-scrollbar-track{background:#13151C}::-webkit-scrollbar-thumb{background:#2A2D3A;border-radius:3px}
-input[type=range]{-webkit-appearance:none;background:rgba(123,92,245,0.15);border-radius:3px;outline:none;height:4px;width:100%}
-input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:#7B5CF5;cursor:pointer;box-shadow:0 0 8px rgba(123,92,245,0.4)}
-select{background:#1A1D26;color:#F3F4F6;border:1px solid rgba(123,92,245,0.2);border-radius:8px;padding:7px 10px;font-family:'DM Sans',sans-serif;font-size:12px;font-weight:500;outline:none;cursor:pointer}select:focus{border-color:#7B5CF5}
-textarea{background:#0D0E14;color:#F3F4F6;border:1px solid rgba(123,92,245,0.2);border-radius:10px;padding:12px;font-family:'JetBrains Mono',monospace;font-size:12px;line-height:1.6;outline:none;resize:vertical;width:100%}textarea:focus{border-color:#7B5CF5}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}@keyframes spin{to{transform:rotate(360deg)}}@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}@keyframes slideUp{from{opacity:0;transform:translateY(30px)}to{opacity:1;transform:translateY(0)}}
-.tip{position:relative;cursor:help;display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;background:rgba(123,92,245,0.15);color:#7B5CF5;font-size:9px;font-weight:700;margin-left:4px;flex-shrink:0}.tip:hover .tiptext{display:block}
-.tiptext{display:none;position:absolute;bottom:22px;left:50%;transform:translateX(-50%);background:#1E2130;border:1px solid rgba(123,92,245,0.25);border-radius:8px;padding:8px 10px;font-family:'DM Sans';font-size:11px;color:#F3F4F6;width:220px;z-index:999;line-height:1.4;box-shadow:0 8px 24px rgba(0,0,0,0.4)}
-</style>
-</head>
-<body>
-<div id="root"></div>
-<script type="text/babel">
-const{useState,useEffect,useCallback,useRef}=React;const LWC=window.LightweightCharts;
-const P={violet:"#7B5CF5",ember:"#F97316",jade:"#2DC771",danger:"#EF4444",cobalt:"#3B5BF5",ink:"#13151C",ash:"#6B7280",mist:"#F3F4F6",white:"#FFFFFF",card:"#1A1D26",surface:"#1E2130",border:"rgba(123,92,245,0.12)"};
-const Fd="'Cormorant Display',Georgia,serif",Fs="'DM Sans',system-ui,sans-serif",Fm="'JetBrains Mono',monospace";
-const LOGO="data:image/jpeg;base64,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";
-const DN={"GC=F":"Altın","SI=F":"Gümüş","CL=F":"Petrol","NG=F":"Doğalgaz","HG=F":"Bakır","PL=F":"Platin","PA=F":"Paladyum","ZC=F":"Mısır","ZW=F":"Buğday","ZS=F":"Soya","KC=F":"Kahve","CC=F":"Kakao","SB=F":"Şeker","CT=F":"Pamuk","ALI=F":"Alüminyum","EURUSD=X":"EUR/USD","GBPUSD=X":"GBP/USD","USDJPY=X":"USD/JPY","USDTRY=X":"USD/TRY"};
-const dN=s=>DN[s]||s.replace("-USDT","/USDT").replace("USDT","/USDT");
+const express = require('express');
+const path = require('path');
+const fs = require('fs');
+const https = require('https');
 
-async function fetchOKX(instId,bar,limit){const r=await fetch(`/api/okx/candles/${encodeURIComponent(instId)}?bar=${bar}&limit=${limit||300}`);if(!r.ok)throw new Error("OKX "+r.status);return(await r.json()).candles||[];}
-async function fetchYahoo(sym,interval,range){const r=await fetch(`/api/yahoo/${encodeURIComponent(sym)}?interval=${interval}&range=${range}`);if(!r.ok)throw new Error((await r.json().catch(()=>({}))).error||`Yahoo ${r.status}`);return(await r.json()).candles||[];}
-async function fetchData(mkt,sym,tfObj){return mkt==="crypto"?fetchOKX(sym,tfObj.value,tfObj.limit||300):fetchYahoo(sym,tfObj.value,tfObj.range||"1y");}
+const app = express();
+const PORT = process.env.PORT || 3000;
+app.use(express.json({ limit: '1mb' }));
 
-function _atr(b,x,len){if(x<1)return b[0].high-b[0].low;let s=0,n=0;for(let i=Math.max(1,x-len+1);i<=x;i++){s+=Math.max(b[i].high-b[i].low,Math.abs(b[i].high-b[i-1].close),Math.abs(b[i].low-b[i-1].close));n++;}return n?s/n:0;}
-function _ema(b,x,len){const k=2/(len+1);let e=b[0].close;for(let i=1;i<=x;i++)e=b[i].close*k+e*(1-k);return e;}
-function _rsi(b,x,len=14){if(x<len)return 50;let g=0,lo=0;for(let i=x-len+1;i<=x;i++){const d=b[i].close-b[i-1].close;if(d>0)g+=d;else lo-=d;}return lo===0?100:100-100/(1+g/lo);}
-function backtest(bars,cfg){const{al,man,mA,mP,aL,pD,rOn,rV,eOn,eL,cap}=cfg;const I=cap||10000;let cash=I,pos=[],trades=[],eqData=[],entries=[],exits=[];let peak=I,mDD=0;for(let i=1;i<bars.length;i++){const p=bars[i].close,a=_atr(bars,i,aL),e10=_ema(bars,i,eL||10),r=_rsi(bars,i);const fA=man?mA:a,fT=man?mP:a/pD,eS=eOn?p<e10:true,rO=rOn?r<rV:true;const pV=pos.reduce((s,x)=>s+x.q*p,0),curE=cash+pV;if(!pos.length&&eS&&rO){const amt=curE*(al[0]/100);if(amt>1&&cash>=amt){pos.push({q:amt/p,ep:p});cash-=amt;entries.push({time:bars[i].time,price:p,layer:1});}}else if(pos.length>0&&pos.length<5){const lE=pos[pos.length-1].ep;if(p<lE-fA&&eS){const e2=cash+pos.reduce((s,x)=>s+x.q*p,0),amt=e2*(al[pos.length]/100);if(amt>1&&cash>=amt){pos.push({q:amt/p,ep:p});cash-=amt;entries.push({time:bars[i].time,price:p,layer:pos.length});}}}if(pos.length>0){const tQ=pos.reduce((s,x)=>s+x.q,0),tC=pos.reduce((s,x)=>s+x.q*x.ep,0),aP=tC/tQ,rE=rOn&&r>rV;if(p>=aP+fT||rE){const eV=tQ*p,pnl=eV-tC;trades.push({bar:i,time:bars[i].time,ae:+aP.toFixed(2),ex:+p.toFixed(2),ly:pos.length,pnl:+pnl.toFixed(2),pp:+((pnl/tC)*100).toFixed(2),rs:rE?"RSI":"TP",at:+fA.toFixed(2)});exits.push({time:bars[i].time,price:p,reason:rE?"RSI":"TP",pnl:+pnl.toFixed(2)});cash+=eV;pos=[];}}const cE=cash+pos.reduce((s,x)=>s+x.q*p,0);if(cE>peak)peak=cE;const dd=((peak-cE)/peak)*100;if(dd>mDD)mDD=dd;eqData.push({time:bars[i].time,value:+cE.toFixed(2)});}const fE=cash+pos.reduce((s,x)=>s+x.q*bars[bars.length-1].close,0);const w=trades.filter(t=>t.pnl>0),lo=trades.filter(t=>t.pnl<=0);const gW=w.reduce((s,t)=>s+t.pnl,0),gL=Math.abs(lo.reduce((s,t)=>s+t.pnl,0));return{trades,eqData,entries,exits,s:{fE:+fE.toFixed(2),ret:+(((fE-I)/I)*100).toFixed(2),cnt:trades.length,wr:trades.length?+((w.length/trades.length)*100).toFixed(1):0,mDD:+mDD.toFixed(2),pf:gL>0?+(gW/gL).toFixed(2):w.length?999:0,aW:w.length?+(gW/w.length).toFixed(2):0,aL:lo.length?+(-gL/lo.length).toFixed(2):0,aLy:trades.length?+(trades.reduce((s,t)=>s+t.ly,0)/trades.length).toFixed(1):0,oL:pos.length,best:trades.length?+Math.max(...trades.map(t=>t.pnl)).toFixed(2):0,worst:trades.length?+Math.min(...trades.map(t=>t.pnl)).toFixed(2):0}};}
-function parsePine(code){const r={};for(const line of code.split('\n')){const m=line.trim().match(/(\w+)\s*=\s*input[\w.]*\(([^)]+)\)/);if(m){const v=m[1].toLowerCase(),a=m[2],n=s=>{const x=s.match(/-?[\d.]+/);return x?parseFloat(x[0]):null;},dv=n(a);if(v.includes('pos1')||v.includes('alloc'))r.layer1=dv;if(v.includes('pos2'))r.layer2=dv;if(v.includes('pos3'))r.layer3=dv;if(v.includes('pos4'))r.layer4=dv;if(v.includes('pos5'))r.layer5=dv;if(v.includes('aptr')||v.includes('drop'))r.aptr=dv;if(v.includes('profit')||v.includes('target'))r.profitTarget=dv;if(v.includes('atr_len'))r.atrLength=dv;if(v.includes('rsi_level'))r.rsiLevel=dv;if(v.includes('use_ema'))r.useEma=line.includes('true');if(v.includes('use_rsi'))r.useRsi=line.includes('true');if(v.includes('manual'))r.useManual=line.includes('true');}}return r;}
-function mergeCfg(cur,parsed){const n=JSON.parse(JSON.stringify(cur));const d=n.defaults,a=n.allocations;['useManual','useEma','useRsi'].forEach(k=>{if(parsed[k]!==undefined)d[k]=parsed[k];});['rsiLevel','atrLength','emaLength','profitDivisor'].forEach(k=>{if(parsed[k])d[k]=parsed[k];});['layer1','layer2','layer3','layer4','layer5'].forEach(k=>{if(parsed[k])a[k]=parsed[k];});n._version=(parseFloat(n._version||"3.0")+0.1).toFixed(1);return n;}
+const STRATEGY_FILE = path.join(__dirname, 'strategy.json');
+const HISTORY_DIR = path.join(__dirname, '.strategy-history');
+if (!fs.existsSync(HISTORY_DIR)) fs.mkdirSync(HISTORY_DIR, { recursive: true });
 
-function TVChart({bars,entries,exits,eqData,tab}){const ref=useRef(null),cr=useRef(null);useEffect(()=>{if(!ref.current||!LWC)return;if(cr.current)try{cr.current.remove()}catch(e){}ref.current.innerHTML='';const ch=LWC.createChart(ref.current,{width:ref.current.clientWidth,height:400,layout:{background:{type:'solid',color:P.card},textColor:P.ash,fontFamily:Fm,fontSize:11},grid:{vertLines:{color:'rgba(123,92,245,0.06)'},horzLines:{color:'rgba(123,92,245,0.06)'}},crosshair:{mode:0},rightPriceScale:{borderColor:P.border},timeScale:{borderColor:P.border,timeVisible:true},handleScroll:true,handleScale:true});cr.current=ch;if(tab==="candles"&&bars?.length){const cs=ch.addCandlestickSeries({upColor:P.jade,downColor:P.danger,borderUpColor:P.jade,borderDownColor:P.danger,wickUpColor:P.jade+'99',wickDownColor:P.danger+'99'});cs.setData(bars);const vs=ch.addHistogramSeries({priceFormat:{type:'volume'},priceScaleId:'vol'});ch.priceScale('vol').applyOptions({scaleMargins:{top:0.85,bottom:0}});vs.setData(bars.map(b=>({time:b.time,value:b.volume,color:b.close>=b.open?P.jade+'33':P.danger+'33'})));if(entries?.length||exits?.length){cs.setMarkers([...(entries||[]).map(e=>({time:e.time,position:'belowBar',color:P.jade,shape:'arrowUp',text:'B'+e.layer})),...(exits||[]).map(x=>({time:x.time,position:'aboveBar',color:x.pnl>=0?P.jade:P.danger,shape:'arrowDown',text:x.reason+(x.pnl>=0?' +':' ')+x.pnl.toFixed(0)}))].sort((a,b)=>a.time-b.time));}}if(tab==="equity"&&eqData?.length){ch.addAreaSeries({topColor:P.violet+'33',bottomColor:P.violet+'05',lineColor:P.violet,lineWidth:2}).setData(eqData);}if(tab==="drawdown"&&eqData?.length){let pk=10000;ch.addAreaSeries({topColor:P.danger+'33',bottomColor:P.danger+'05',lineColor:P.danger,lineWidth:2,invertFilledArea:true}).setData(eqData.map(d=>{if(d.value>pk)pk=d.value;return{time:d.time,value:+((pk-d.value)/pk*100).toFixed(2)};}));}ch.timeScale().fitContent();const ro=new ResizeObserver(()=>{if(ref.current)ch.applyOptions({width:ref.current.clientWidth})});ro.observe(ref.current);return()=>{ro.disconnect();try{ch.remove()}catch(e){}};},[bars,entries,exits,eqData,tab]);return <div ref={ref} style={{width:"100%",borderRadius:12,overflow:"hidden"}}/>;}
-
-const Tip=({text})=><span className="tip">?<span className="tiptext">{text}</span></span>;
-const Stat=({l,v,color,pre="",suf="",tip})=><div style={{background:P.card,border:`1px solid ${P.border}`,borderRadius:12,padding:"11px 13px",flex:"1 1 110px",minWidth:100,animation:"fadeIn 0.3s"}}><div style={{fontFamily:Fm,fontSize:9,color:P.ash,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:5,display:"flex",alignItems:"center"}}>{l}{tip&&<Tip text={tip}/>}</div><div style={{fontFamily:Fm,fontSize:15,fontWeight:600,color:color||P.mist}}>{pre}{typeof v==="number"?v.toLocaleString("en",{maximumFractionDigits:2}):v}{suf}</div></div>;
-const Sld=({l,v,set,min,max,step=1,suf="",tip})=><div style={{marginBottom:9}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:2}}><span style={{fontFamily:Fs,fontSize:11,color:P.ash,display:"flex",alignItems:"center"}}>{l}{tip&&<Tip text={tip}/>}</span><span style={{fontFamily:Fm,fontSize:11,color:P.violet,fontWeight:600}}>{v}{suf}</span></div><input type="range" min={min} max={max} step={step} value={v} onChange={e=>set(+e.target.value)}/></div>;
-const Tog=({l,v,set,tip})=><label style={{display:"flex",alignItems:"center",gap:8,fontFamily:Fs,fontSize:11,color:P.ash,marginBottom:7,cursor:"pointer"}}><div onClick={()=>set(!v)} style={{width:36,height:20,borderRadius:10,background:v?P.violet:"#2A2D3A",position:"relative",flexShrink:0,transition:"0.25s"}}><div style={{width:16,height:16,borderRadius:8,background:P.white,position:"absolute",top:2,left:v?18:2,transition:"0.25s"}}/></div>{l}{tip&&<Tip text={tip}/>}</label>;
-
-function Onboarding({onClose}){const[step,setStep]=useState(0);const steps=[{t:"Hoş geldiniz! 👋",b:"Martingale V2 stratejisini kripto, ABD hisseleri ve emtialar üzerinde test edin.",i:"🎯"},{t:"Strateji",b:"Fiyat düştükçe kademe kademe alım yapar (5 katman). Ortalama girişin üzerine çıkınca kârla kapatır.",i:"📊"},{t:"Ayarlar",b:"• Allocation: Katman yüzdeleri (%100)\n• APTR: Katmanlar arası $ farkı\n• Profit Target: Kâr hedefi\n• EMA/RSI: Filtreler",i:"⚙️"},{t:"Multi-Market",b:"🪙 Kripto: BTC, ETH, SOL... (OKX)\n📈 Hisse: AAPL, NVDA, TSLA... (Yahoo)\n🏗️ Emtia: Altın, Petrol, Buğday...",i:"🌍"},{t:"Pine Script Konsol",b:"</> butonuyla Pine Script kodunuzu yapıştırın. Parametreler otomatik güncellenir. Geri Al ile önceki versiyona dönün.",i:"💻"}];const s=steps[step];
-return <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center",animation:"fadeIn 0.3s"}}><div style={{background:P.card,border:`1px solid ${P.border}`,borderRadius:20,padding:32,maxWidth:480,width:"90%",animation:"slideUp 0.4s"}}><div style={{display:"flex",alignItems:"center",gap:12,marginBottom:16}}><img src={LOGO} width="28" height="28" style={{borderRadius:6}}/><span style={{fontFamily:Fs,fontSize:13,color:P.ash}}>BottomUP</span><span style={{marginLeft:"auto",fontFamily:Fm,fontSize:10,color:P.ash}}>{step+1}/{steps.length}</span></div><div style={{fontSize:36,marginBottom:12}}>{s.i}</div><h2 style={{fontFamily:Fd,fontSize:24,color:P.white,marginBottom:10}}>{s.t}</h2><p style={{fontFamily:Fs,fontSize:13,color:P.mist,lineHeight:1.7,whiteSpace:"pre-line",marginBottom:20}}>{s.b}</p><div style={{display:"flex",gap:8,justifyContent:"space-between"}}><button onClick={onClose} style={{fontFamily:Fs,fontSize:12,padding:"8px 16px",borderRadius:8,background:"transparent",border:`1px solid ${P.border}`,color:P.ash,cursor:"pointer"}}>Atla</button><div style={{display:"flex",gap:6}}>{step>0&&<button onClick={()=>setStep(step-1)} style={{fontFamily:Fs,fontSize:12,padding:"8px 16px",borderRadius:8,background:P.surface,border:"none",color:P.mist,cursor:"pointer"}}>←</button>}{step<steps.length-1?<button onClick={()=>setStep(step+1)} style={{fontFamily:Fs,fontSize:12,fontWeight:600,padding:"8px 20px",borderRadius:8,background:P.violet,border:"none",color:P.white,cursor:"pointer"}}>İleri →</button>:<button onClick={onClose} style={{fontFamily:Fs,fontSize:12,fontWeight:600,padding:"8px 20px",borderRadius:8,background:P.jade,border:"none",color:P.white,cursor:"pointer"}}>Başla! 🚀</button>}</div></div></div></div>;}
-
-function DevConsole({open,onClose,cfg,onApply}){const[code,setCode]=useState('');const[parsed,setParsed]=useState(null);const[err,setErr]=useState(null);const[saving,setSaving]=useState(false);const[saved,setSaved]=useState(false);const[hist,setHist]=useState([]);const[rb,setRb]=useState(false);
-useEffect(()=>{if(open)fetch('/api/strategy/history').then(r=>r.json()).then(setHist).catch(()=>{});},[open]);
-if(!open)return null;
-return <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.8)",zIndex:9998,display:"flex",alignItems:"center",justifyContent:"center",animation:"fadeIn 0.2s"}}><div style={{background:P.card,border:`1px solid ${P.border}`,borderRadius:16,width:"90%",maxWidth:700,maxHeight:"90vh",overflow:"hidden",display:"flex",flexDirection:"column",animation:"slideUp 0.3s"}}>
-<div style={{padding:"16px 20px",borderBottom:`1px solid ${P.border}`,display:"flex",alignItems:"center",justifyContent:"space-between"}}><div style={{display:"flex",alignItems:"center",gap:10}}><span style={{fontSize:18}}>🧑‍💻</span><div><h2 style={{fontFamily:Fd,fontSize:20,color:P.white}}>Pine Script <span style={{color:P.violet}}>Konsol</span></h2><p style={{fontFamily:Fm,fontSize:9,color:P.ash}}>Yapıştır → Parse → Uygula</p></div></div><button onClick={onClose} style={{fontSize:18,background:"transparent",border:"none",color:P.ash,cursor:"pointer"}}>✕</button></div>
-<div style={{padding:20,overflowY:"auto",flex:1}}>
-<label style={{fontFamily:Fm,fontSize:10,color:P.violet,letterSpacing:"0.1em",textTransform:"uppercase",display:"block",marginBottom:6}}>Pine Script Kodu</label>
-<textarea value={code} onChange={e=>setCode(e.target.value)} rows={8} placeholder={"// Pine Script kodunu yapıştırın\npos1_alloc = input.float(10, \"Pos 1 %\")\naptr = input.float(80, \"APTR $\")"}/>
-<div style={{display:"flex",gap:8,marginTop:8}}>
-<button onClick={()=>{setErr(null);setSaved(false);const p=parsePine(code);if(!Object.keys(p).length){setErr("⚠ Parametre bulunamadı.");return;}setParsed(p);}} disabled={!code.trim()} style={{fontFamily:Fs,fontSize:12,fontWeight:600,padding:"8px 20px",borderRadius:8,background:code.trim()?P.violet:P.surface,border:"none",color:P.white,cursor:code.trim()?"pointer":"not-allowed"}}>🔍 Parse Et</button>
-{parsed&&<button onClick={async()=>{if(!parsed||!cfg)return;setSaving(true);try{const merged=mergeCfg(cfg,parsed);const r=await fetch('/api/strategy',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(merged)});if(!r.ok)throw new Error('Fail');setSaved(true);setParsed(null);setCode('');onApply(merged);setHist(await(await fetch('/api/strategy/history')).json());}catch(e){setErr("Hata: "+e.message);}setSaving(false);}} disabled={saving} style={{fontFamily:Fs,fontSize:12,fontWeight:600,padding:"8px 20px",borderRadius:8,background:saving?P.surface:P.jade,border:"none",color:P.white,cursor:saving?"wait":"pointer"}}>{saving?"⏳":"✅ Uygula"}</button>}
-</div>
-{err&&<div style={{padding:"10px",background:"rgba(239,68,68,0.1)",border:"1px solid rgba(239,68,68,0.25)",borderRadius:10,fontFamily:Fm,fontSize:12,color:P.danger,marginTop:10}}>{err}</div>}
-{saved&&<div style={{padding:"10px",background:"rgba(45,199,113,0.1)",border:"1px solid rgba(45,199,113,0.25)",borderRadius:10,fontFamily:Fm,fontSize:12,color:P.jade,marginTop:10}}>✅ Güncellendi! RUN basın.</div>}
-{parsed&&!saved&&<div style={{background:P.surface,borderRadius:10,padding:14,marginTop:12,border:`1px solid ${P.border}`}}><div style={{fontFamily:Fm,fontSize:10,color:P.ember,marginBottom:8,fontWeight:600}}>📋 PARSE SONUÇLARI</div><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,fontFamily:Fm,fontSize:12}}>{Object.entries(parsed).map(([k,v])=><div key={k} style={{display:"flex",justifyContent:"space-between",padding:"4px 8px",background:P.card,borderRadius:6}}><span style={{color:P.ash}}>{k}</span><span style={{color:P.violet,fontWeight:600}}>{String(v)}</span></div>)}</div></div>}
-<div style={{borderTop:`1px solid ${P.border}`,paddingTop:14,marginTop:16}}><div style={{fontFamily:Fm,fontSize:10,color:P.violet,letterSpacing:"0.1em",marginBottom:8,textTransform:"uppercase",fontWeight:600}}>📦 Versiyon Geçmişi</div>
-{!hist.length?<div style={{fontFamily:Fm,fontSize:11,color:P.ash}}>Henüz yok.</div>:<div style={{maxHeight:180,overflowY:"auto"}}>{hist.map((h,i)=><div key={i} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"7px 10px",background:i%2===0?P.card:"transparent",borderRadius:6,marginBottom:2}}><div><span style={{fontFamily:Fm,fontSize:11,color:P.mist}}>v{h.version}</span><span style={{fontFamily:Fm,fontSize:10,color:P.ash,marginLeft:8}}>{new Date(h.date).toLocaleString("tr-TR",{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"})}</span></div><button onClick={async()=>{setRb(true);try{await fetch('/api/strategy/rollback',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filename:h.filename})});onApply(await(await fetch('/api/strategy')).json());setHist(await(await fetch('/api/strategy/history')).json());}catch(e){setErr("Hata");}setRb(false);}} disabled={rb} style={{fontFamily:Fs,fontSize:10,fontWeight:600,padding:"4px 12px",borderRadius:6,background:"rgba(249,115,22,0.1)",border:"1px solid rgba(249,115,22,0.25)",color:P.ember,cursor:rb?"wait":"pointer"}}>{rb?"⏳":"↩ Geri Al"}</button></div>)}</div>}
-</div></div></div></div>;}
-
-function SymbolSearch({mkt,sym,onSelect,presets}){
-  const[open,setOpen]=useState(false);const[q,setQ]=useState('');const[results,setResults]=useState([]);const[loading,setLoading]=useState(false);const timer=useRef(null);const ref=useRef(null);
-  // Close on outside click
-  useEffect(()=>{const h=e=>{if(ref.current&&!ref.current.contains(e.target))setOpen(false);};document.addEventListener('mousedown',h);return()=>document.removeEventListener('mousedown',h);},[]);
-  // Search API with debounce
-  const search=useCallback(val=>{if(timer.current)clearTimeout(timer.current);if(!val||val.length<1){setResults([]);return;}
-    timer.current=setTimeout(async()=>{setLoading(true);try{
-      const endpoint=mkt==="crypto"?`/api/search/okx?q=${encodeURIComponent(val)}`:`/api/search/yahoo?q=${encodeURIComponent(val)}`;
-      const r=await fetch(endpoint);const data=await r.json();setResults(data.slice(0,10));
-    }catch(e){setResults([]);}setLoading(false);},300);
-  },[mkt]);
-  // Filter presets locally
-  const filtered=q?presets.filter(s=>s.toLowerCase().includes(q.toLowerCase())||((DN[s]||'').toLowerCase().includes(q.toLowerCase()))).slice(0,8):presets.slice(0,15);
-  const pick=s=>{onSelect(s);setOpen(false);setQ('');setResults([]);};
-  return <div ref={ref} style={{position:"relative"}}>
-    <button onClick={()=>setOpen(!open)} style={{fontFamily:Fm,fontSize:12,padding:"7px 12px",borderRadius:8,background:P.card,border:`1px solid ${open?P.violet:P.border}`,color:P.mist,cursor:"pointer",minWidth:100,textAlign:"left",fontWeight:600,display:"flex",alignItems:"center",gap:4,transition:"0.2s"}}>{dN(sym)}<span style={{color:P.ash,fontSize:10,marginLeft:"auto"}}>▾</span></button>
-    {open&&<div style={{position:"absolute",top:"100%",left:0,marginTop:4,width:280,background:P.card,border:`1px solid ${P.border}`,borderRadius:12,boxShadow:"0 12px 40px rgba(0,0,0,0.5)",zIndex:999,overflow:"hidden",animation:"fadeIn 0.15s"}}>
-      <div style={{padding:"8px 10px",borderBottom:`1px solid ${P.border}`}}>
-        <input value={q} onChange={e=>{setQ(e.target.value);search(e.target.value);}} placeholder={mkt==="crypto"?"BTC, SOL, DOGE...":mkt==="stocks"?"AAPL, TSLA, NVDA...":"Altın, Petrol, EUR..."} autoFocus style={{width:"100%",background:P.surface,border:`1px solid ${P.border}`,borderRadius:8,padding:"7px 10px",fontFamily:Fm,fontSize:12,color:P.mist,outline:"none"}}/>
-      </div>
-      <div style={{maxHeight:260,overflowY:"auto"}}>
-        {/* API search results */}
-        {q&&results.length>0&&<><div style={{padding:"4px 12px",fontFamily:Fm,fontSize:9,color:P.violet,letterSpacing:"0.1em",textTransform:"uppercase"}}>🔍 Arama Sonuçları</div>
-        {results.map((r,i)=><div key={'api-'+i} onClick={()=>pick(r.symbol)} style={{padding:"7px 12px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center",transition:"0.15s",background:"transparent"}} onMouseEnter={e=>e.currentTarget.style.background=P.surface} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
-          <div><span style={{fontFamily:Fm,fontSize:12,color:P.white,fontWeight:600}}>{r.symbol}</span>{r.name&&r.name!==r.symbol&&<span style={{fontFamily:Fs,fontSize:10,color:P.ash,marginLeft:6}}>{r.name.slice(0,24)}</span>}</div>
-          {r.type&&<span style={{fontFamily:Fm,fontSize:9,color:P.ash,background:P.surface,padding:"1px 6px",borderRadius:4}}>{r.type==="EQUITY"?"Hisse":r.type==="CRYPTOCURRENCY"?"Kripto":r.type==="FUTURE"?"Vadeli":r.type==="ETF"?"ETF":r.exchange||r.type}</span>}
-        </div>)}</>}
-        {q&&loading&&<div style={{padding:"12px",fontFamily:Fm,fontSize:11,color:P.ash,textAlign:"center"}}>Aranıyor...</div>}
-        {/* Preset list */}
-        {filtered.length>0&&<><div style={{padding:"4px 12px",fontFamily:Fm,fontSize:9,color:P.ash,letterSpacing:"0.1em",textTransform:"uppercase",borderTop:q&&results.length?`1px solid ${P.border}`:"none"}}>{q?"Liste":"Popüler"}</div>
-        {filtered.map(s=><div key={'pre-'+s} onClick={()=>pick(s)} style={{padding:"6px 12px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center",background:s===sym?"rgba(123,92,245,0.08)":"transparent",transition:"0.15s"}} onMouseEnter={e=>{if(s!==sym)e.currentTarget.style.background=P.surface}} onMouseLeave={e=>{if(s!==sym)e.currentTarget.style.background=s===sym?"rgba(123,92,245,0.08)":"transparent"}}>
-          <span style={{fontFamily:Fm,fontSize:11,color:s===sym?P.violet:P.mist,fontWeight:s===sym?700:400}}>{dN(s)}</span>
-          {s===sym&&<span style={{fontSize:8,color:P.violet}}>●</span>}
-        </div>)}</>}
-        {q&&!loading&&!results.length&&!filtered.length&&<div style={{padding:"16px",textAlign:"center",fontFamily:Fs,fontSize:12,color:P.ash}}>Sonuç bulunamadı</div>}
-      </div>
-    </div>}
-  </div>;
+// ── Yahoo Finance Proxy ──
+function yahooFetch(url) {
+  return new Promise((resolve, reject) => {
+    https.get(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, (res) => {
+      let data = '';
+      res.on('data', c => data += c);
+      res.on('end', () => {
+        try { resolve(JSON.parse(data)); }
+        catch (e) { reject(new Error('Yahoo parse error')); }
+      });
+    }).on('error', reject);
+  });
 }
 
-function App(){
-  const[cfg,setCfg]=useState(null);const[showTut,setShowTut]=useState(true);const[showDev,setShowDev]=useState(false);
-  const[mkt,setMkt]=useState("crypto");const[sym,setSym]=useState("ETH-USDT");const[tf,setTf]=useState("1H");
-  const[a1,sA1]=useState(10);const[a2,sA2]=useState(15);const[a3,sA3]=useState(20);const[a4,sA4]=useState(25);const[a5,sA5]=useState(30);
-  const[man,setMan]=useState(true);const[mA,setMA]=useState(80);const[mP,setMP]=useState(40);
-  const[aL,setAL]=useState(14);const[pD,setPD]=useState(2);const[rOn,setROn]=useState(false);const[rV,setRV]=useState(71);const[eOn,setEOn]=useState(true);
-  const[res,setRes]=useState(null);const[bars,setBars]=useState(null);const[tab,setTab]=useState("candles");const[st,setSt]=useState("idle");
-  const[lP,setLP]=useState(null);const[err,setErr]=useState(null);const ws=useRef(null);
+// ── OKX API Proxy ──
+app.get('/api/okx/candles/:instId', async (req, res) => {
+  try {
+    const { instId } = req.params;
+    const barRaw = req.query.bar || '1H';
+    const BAR_MAP = {'1h':'1H','2h':'2H','4h':'4H','6h':'6H','12h':'12H','1d':'1D','1w':'1W','1mo':'1M'};
+    const bar = BAR_MAP[barRaw] || barRaw;
 
-  const applyCfg=useCallback(c=>{setCfg(c);if(c.defaults){setMan(c.defaults.useManual!==false);setEOn(c.defaults.useEma!==false);setROn(c.defaults.useRsi===true);setRV(c.defaults.rsiLevel||71);setAL(c.defaults.atrLength||14);setPD(c.defaults.profitDivisor||2);}if(c.allocations){sA1(c.allocations.layer1||10);sA2(c.allocations.layer2||15);sA3(c.allocations.layer3||20);sA4(c.allocations.layer4||25);sA5(c.allocations.layer5||30);}},[]);
-  useEffect(()=>{fetch('/api/strategy').then(r=>r.json()).then(applyCfg).catch(()=>{});},[applyCfg]);
+    // Determine how many pages to fetch based on timeframe
+    // OKX max 300 per request; we want ~500+ candles for good backtest
+    const pagesMap = {'1m':1,'5m':2,'15m':3,'30m':3,'1H':5,'2H':5,'4H':6,'6H':6,'12H':5,'1D':7,'1W':4,'1M':3};
+    const pages = pagesMap[bar] || 2;
 
-  const mktCfg=cfg?.markets?.[mkt];const syms=mktCfg?.symbols||["ETH-USDT"];const tfs=mktCfg?.timeframes||[{label:"1s",value:"1H",limit:300}];
-  const changeMkt=useCallback(m=>{setMkt(m);const mc=cfg?.markets?.[m];if(mc){setSym(mc.symbols[0]);setTf(mc.timeframes[0].value);}setLP(null);setRes(null);setBars(null);setSt("idle");},[cfg]);
+    let allCandles = [];
+    let after = '';
 
-  const getSD=useCallback((s,t)=>{if(!man||!cfg)return;const sd=cfg.smartDefaults||{};const sg=cfg.symbolGroups||{};const m=Math.max(0,tfs.findIndex(x=>x.value===t));let g="OTHER";if(mkt==="stocks")g="STOCK";else if(mkt==="commodities")g="COMMODITY";else if(s.startsWith("BTC"))g="BTC";else if(s.startsWith("ETH"))g="ETH";else if(s.startsWith("BNB"))g="BNB";else if((sg.MID||[]).includes(s))g="MID";else if((sg.LOW||[]).includes(s))g="LOW";const d=sd[g]||sd.OTHER;if(d){setMA(d.aptr[Math.min(m,d.aptr.length-1)]);setMP(d.profit[Math.min(m,d.profit.length-1)]);}},[man,cfg,mkt,tfs]);
+    for (let p = 0; p < pages; p++) {
+      const params = `instId=${encodeURIComponent(instId)}&bar=${bar}&limit=300${after ? '&after=' + after : ''}`;
+      // First page: /candles (recent), subsequent pages: /history-candles (older)
+      const endpoint = p === 0 ? 'candles' : 'history-candles';
+      const url = `https://www.okx.com/api/v5/market/${endpoint}?${params}`;
+      const data = await yahooFetch(url);
 
-  const run=useCallback(async()=>{setSt("loading");setErr(null);try{const tfObj=tfs.find(t=>t.value===tf)||tfs[0];const d=await fetchData(mkt,sym,tfObj);if(!d.length)throw new Error("Veri yok");setBars(d);setRes(backtest(d,{al:[a1,a2,a3,a4,a5],man,mA,mP,aL,pD,rOn,rV,eOn,eL:cfg?.defaults?.emaLength||10,cap:cfg?.defaults?.initialCapital||10000}));setSt("done");}catch(e){setErr(e.message);setSt("error");}},[sym,tf,mkt,a1,a2,a3,a4,a5,man,mA,mP,aL,pD,rOn,rV,eOn,cfg,tfs]);
+      if (data.code !== '0' || !data.data?.length) break;
 
-  useEffect(()=>{if(ws.current)ws.current.close();setLP(null);if(mkt!=="crypto")return;try{const w=new WebSocket('wss://ws.okx.com:8443/ws/v5/public');w.onopen=()=>{w.send(JSON.stringify({op:"subscribe",args:[{channel:"trades",instId:sym}]}));};w.onmessage=e=>{try{const d=JSON.parse(e.data);if(d.data&&d.data[0])setLP(+parseFloat(d.data[0].px).toFixed(4));}catch{}};ws.current=w;}catch{}return()=>{if(ws.current)ws.current.close();};},[sym,mkt]);
+      // OKX returns newest first
+      allCandles = allCandles.concat(data.data);
 
-  const s=res?.s,rc=s?(s.ret>=0?P.jade:P.danger):P.mist,aT=a1+a2+a3+a4+a5;
+      // 'after' = oldest timestamp in this batch → fetches older data next
+      const oldest = data.data[data.data.length - 1][0];
+      after = oldest;
 
-  return <div style={{minHeight:"100vh",background:P.ink,color:P.mist,fontFamily:Fs}}>
-    {showTut&&<Onboarding onClose={()=>setShowTut(false)}/>}
-    <DevConsole open={showDev} onClose={()=>setShowDev(false)} cfg={cfg} onApply={c=>{applyCfg(c);setShowDev(false);}}/>
-    {/* HEADER */}
-    <div style={{padding:"10px 18px",borderBottom:`1px solid ${P.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8,background:`linear-gradient(180deg,${P.card},${P.ink})`}}>
-      <div style={{display:"flex",alignItems:"center",gap:10}}><img src={LOGO} width="30" height="30" style={{borderRadius:8}}/><div><h1 style={{fontFamily:Fd,fontSize:20,fontWeight:700,color:P.white}}>Martingale <span style={{color:P.violet}}>V2</span></h1><p style={{fontFamily:Fm,fontSize:8,color:P.ash}}>MULTI-MARKET • v{cfg?._version||"3.0"}</p></div></div>
-      <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
-        {lP&&<div style={{fontFamily:Fm,fontSize:13,color:P.jade,display:"flex",alignItems:"center",gap:5,fontWeight:600}}><div style={{width:7,height:7,borderRadius:4,background:P.jade,animation:"pulse 2s infinite"}}/>${lP.toLocaleString("en")}</div>}
-        <select value={mkt} onChange={e=>changeMkt(e.target.value)} style={{fontWeight:600,background:mkt==="crypto"?"rgba(123,92,245,0.15)":mkt==="stocks"?"rgba(45,199,113,0.15)":"rgba(249,115,22,0.15)"}}>{cfg?.markets?Object.entries(cfg.markets).map(([k,v])=><option key={k} value={k}>{v.label}</option>):<><option value="crypto">🪙 Kripto</option><option value="stocks">📈 Hisse</option><option value="commodities">🏗️ Emtia</option></>}</select>
-        <SymbolSearch mkt={mkt} sym={sym} presets={syms} onSelect={s=>{setSym(s);getSD(s,tf);}}/>
-        <select value={tf} onChange={e=>{setTf(e.target.value);getSD(sym,e.target.value);}}>{tfs.map(t=><option key={t.value} value={t.value}>{t.label}</option>)}</select>
-        <button onClick={run} disabled={st==="loading"} style={{fontFamily:Fs,fontSize:12,fontWeight:700,padding:"7px 18px",borderRadius:10,background:st==="loading"?"#2A2D3A":`linear-gradient(135deg,${P.violet},${P.cobalt})`,border:"none",color:P.white,cursor:st==="loading"?"wait":"pointer",boxShadow:st!=="loading"?`0 4px 20px ${P.violet}40`:"none"}}>{st==="loading"?"⏳":"▶ RUN"}</button>
-        <button onClick={()=>setShowDev(true)} style={{fontFamily:Fm,fontSize:11,padding:"7px 12px",borderRadius:8,background:"rgba(249,115,22,0.1)",border:"1px solid rgba(249,115,22,0.25)",color:P.ember,cursor:"pointer",fontWeight:600}}>&lt;/&gt;</button>
-        <button onClick={()=>setShowTut(true)} style={{fontFamily:Fs,fontSize:11,padding:"7px 10px",borderRadius:8,background:"transparent",border:`1px solid ${P.border}`,color:P.ash,cursor:"pointer"}}>❓</button>
-      </div>
-    </div>
-    {err&&<div style={{margin:"8px 18px",padding:"10px 14px",background:"rgba(239,68,68,0.08)",border:"1px solid rgba(239,68,68,0.2)",borderRadius:10,fontFamily:Fm,fontSize:12,color:P.danger}}>⚠ {err}</div>}
-    <div style={{display:"flex",height:"calc(100vh - 56px)"}}>
-      {/* SIDEBAR */}
-      <div style={{width:250,minWidth:250,borderRight:`1px solid ${P.border}`,padding:"14px 12px",overflowY:"auto",background:P.card+"88"}}>
-        <div style={{fontFamily:Fm,fontSize:10,color:P.violet,letterSpacing:"0.12em",marginBottom:8,textTransform:"uppercase",fontWeight:600}}>Allocation</div>
-        <Sld l="Katman 1" v={a1} set={sA1} min={1} max={50} suf="%" tip="İlk alım."/><Sld l="Katman 2" v={a2} set={sA2} min={1} max={50} suf="%"/><Sld l="Katman 3" v={a3} set={sA3} min={1} max={50} suf="%"/><Sld l="Katman 4" v={a4} set={sA4} min={1} max={50} suf="%"/><Sld l="Katman 5" v={a5} set={sA5} min={1} max={50} suf="%" tip="Son katman. ⚠ Stop-loss yok!"/>
-        <div style={{fontFamily:Fm,fontSize:11,color:aT===100?P.jade:P.ember,marginBottom:4,fontWeight:600}}>Toplam: {aT}%{aT!==100&&" ⚠"}</div>
-        <div style={{height:1,background:P.border,margin:"10px 0"}}/>
-        <div style={{fontFamily:Fm,fontSize:10,color:P.violet,letterSpacing:"0.12em",marginBottom:8,textTransform:"uppercase",fontWeight:600}}>Strateji</div>
-        <Tog l="Manuel" v={man} set={setMan} tip="Sabit $ vs ATR otomatik."/>
-        {man?<><Sld l="APTR $" v={mA} set={setMA} min={0.0005} max={8000} step={mA>100?10:mA>10?1:mA>1?0.1:0.001} tip="Katmanlar arası fark."/><Sld l="Kâr $" v={mP} set={setMP} min={0.0005} max={4000} step={mP>50?5:mP>5?0.5:mP>0.5?0.05:0.0005} tip="Kâr hedefi."/></>:<><Sld l="ATR" v={aL} set={setAL} min={5} max={50}/><Sld l="Bölen" v={pD} set={setPD} min={1} max={5} step={0.5}/></>}
-        <div style={{height:1,background:P.border,margin:"10px 0"}}/>
-        <Tog l="EMA Filtre" v={eOn} set={setEOn}/><Tog l="RSI Çıkış" v={rOn} set={setROn}/>{rOn&&<Sld l="RSI" v={rV} set={setRV} min={50} max={90}/>}
-        {bars&&<div style={{marginTop:12,padding:10,background:"rgba(123,92,245,0.05)",borderRadius:10,border:`1px solid ${P.border}`,fontFamily:Fm,fontSize:10}}><div style={{color:P.violet,fontWeight:600}}>{dN(sym)} • {tf}</div><div style={{color:P.ash}}>{bars.length} mum • {mkt==="crypto"?"OKX":"Yahoo"}</div></div>}
-      </div>
-      {/* MAIN */}
-      <div style={{flex:1,padding:14,overflowY:"auto"}}>
-        {st==="loading"&&<div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:300,gap:12}}><div style={{width:28,height:28,border:`3px solid ${P.violet}`,borderTopColor:"transparent",borderRadius:"50%",animation:"spin .7s linear infinite"}}/><span style={{fontFamily:Fs,fontSize:13,color:P.ash}}>{mkt==="crypto"?"OKX":"Yahoo"}'den veri çekiliyor...</span></div>}
-        {s&&st==="done"&&<>
-          <div style={{display:"flex",flexWrap:"wrap",gap:7,marginBottom:12}}>
-            <Stat l="Bakiye" v={s.fE} pre="$" color={rc}/><Stat l="Getiri" v={s.ret} suf="%" color={rc} pre={s.ret>=0?"+":""}/><Stat l="Kazanma" v={s.wr} suf="%" color={s.wr>=50?P.jade:P.danger}/><Stat l="Maks DD" v={s.mDD} suf="%" color={P.danger} pre="-"/><Stat l="PF" v={s.pf} color={s.pf>=1.5?P.jade:s.pf>=1?P.ember:P.danger}/><Stat l="Trade" v={s.cnt} color={P.cobalt}/><Stat l="Ort.Kat" v={s.aLy} color={P.violet}/>{s.oL>0&&<Stat l="⚠Açık" v={s.oL} color={P.ember}/>}
-          </div>
-          <div style={{display:"flex",gap:4,marginBottom:10,flexWrap:"wrap"}}>{[["candles","🕯 Mum"],["equity","📈 Bakiye"],["drawdown","📉 DD"],["trades","📋 İşlem"]].map(([k,lb])=><button key={k} onClick={()=>setTab(k)} style={{fontFamily:Fs,fontSize:11,fontWeight:600,padding:"7px 14px",borderRadius:8,background:tab===k?"rgba(123,92,245,0.1)":"transparent",border:`1px solid ${tab===k?"rgba(123,92,245,0.4)":P.border}`,color:tab===k?P.violet:P.ash,cursor:"pointer"}}>{lb}</button>)}</div>
-          <div style={{background:P.card,border:`1px solid ${P.border}`,borderRadius:14,overflow:"hidden",marginBottom:12}}>
-            {tab!=="trades"?<TVChart bars={bars} entries={res.entries} exits={res.exits} eqData={res.eqData} tab={tab}/>:
-            <div style={{maxHeight:400,overflowY:"auto",padding:14}}><table style={{width:"100%",borderCollapse:"collapse",fontFamily:Fm,fontSize:11}}><thead><tr>{["#","Zaman","Giriş","Çıkış","Kat","K/Z $","K/Z %","Tür"].map(h=><th key={h} style={{textAlign:"left",padding:"7px",color:P.ash,fontSize:10,borderBottom:`1px solid ${P.border}`,position:"sticky",top:0,background:P.card}}>{h}</th>)}</tr></thead><tbody>{res.trades.map((t,i)=><tr key={i} style={{borderBottom:`1px solid ${P.border}`}}><td style={{padding:"5px 7px",color:P.ash}}>{i+1}</td><td style={{padding:"5px 7px",fontSize:10}}>{(()=>{const d=new Date(t.time*1000);const isIntra=["15m","30m","1m","5m","1H","2H","4H","6H","12H"].includes(tf)||tf.includes("m")||tf.includes("h");return isIntra?d.toLocaleDateString("tr-TR",{month:"short",day:"numeric"})+" "+d.toLocaleTimeString("tr-TR",{hour:"2-digit",minute:"2-digit"}):d.toLocaleDateString("tr-TR",{year:"numeric",month:"short",day:"numeric"});})()}</td><td style={{padding:"5px 7px"}}>${t.ae}</td><td style={{padding:"5px 7px"}}>${t.ex}</td><td style={{padding:"5px 7px",color:P.violet,fontWeight:600}}>{t.ly}</td><td style={{padding:"5px 7px",color:t.pnl>=0?P.jade:P.danger,fontWeight:600}}>{t.pnl>=0?"+":""}{t.pnl.toFixed(2)}</td><td style={{padding:"5px 7px",color:t.pp>=0?P.jade:P.danger}}>{t.pp>=0?"+":""}{t.pp}%</td><td style={{padding:"5px 7px"}}><span style={{background:t.rs==="TP"?P.jade+"18":P.ember+"18",color:t.rs==="TP"?P.jade:P.ember,padding:"2px 7px",borderRadius:4,fontSize:10,fontWeight:600}}>{t.rs==="TP"?"Kâr":"RSI"}</span></td></tr>)}{!res.trades.length&&<tr><td colSpan={8} style={{padding:24,textAlign:"center",color:P.ash}}>İşlem yok</td></tr>}</tbody></table></div>}
-          </div>
-          <div style={{background:P.card,border:`1px solid ${P.border}`,borderRadius:14,padding:16}}><div style={{fontFamily:Fm,fontSize:10,color:P.violet,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:10,fontWeight:600}}>Risk</div><div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:6,fontFamily:Fm,fontSize:12}}><div><span style={{color:P.ash}}>En İyi </span><span style={{color:P.jade}}>+${s.best}</span></div><div><span style={{color:P.ash}}>En Kötü </span><span style={{color:P.danger}}>${s.worst}</span></div><div><span style={{color:P.ash}}>Ort W </span><span style={{color:P.jade}}>+${s.aW}</span></div><div><span style={{color:P.ash}}>Ort L </span><span style={{color:P.danger}}>${s.aL}</span></div><div style={{gridColumn:"span 2"}}><span style={{color:P.ash}}>Sonuç </span><span style={{fontWeight:700,fontSize:13,color:s.ret>0&&s.mDD<25&&s.pf>1.2?P.jade:s.ret>0?P.ember:P.danger}}>{s.ret>0&&s.mDD<25&&s.pf>1.2?"✅ Uygulanabilir":s.ret>0?"⚠️ Riskli":s.cnt===0?"—":"❌ Kârsız"}</span></div></div></div>
-          <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:6,padding:"12px 0 4px"}}><img src={LOGO} width="16" height="16" style={{borderRadius:3}}/><span style={{fontFamily:Fs,fontSize:11,color:P.ash}}>Built by <span style={{color:P.white,fontWeight:600}}>BottomUP</span></span></div>
-        </>}
-        {st==="idle"&&<div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:300,gap:10}}><img src={LOGO} width="48" height="48" style={{borderRadius:12}}/><span style={{fontFamily:Fd,fontSize:22,color:P.white}}>Press <span style={{color:P.violet}}>RUN</span></span><span style={{fontFamily:Fs,fontSize:12,color:P.ash}}>Market, sembol ve zaman dilimi seçin</span></div>}
-      </div>
-    </div>
-  </div>;
-}
-ReactDOM.render(React.createElement(App),document.getElementById('root'));
-</script>
-</body>
-</html>
+      // If less than 300 returned, no more data
+      if (data.data.length < 300) break;
+    }
+
+    if (!allCandles.length) {
+      return res.status(404).json({ error: 'OKX: No data for ' + instId + ' ' + bar });
+    }
+
+    // Deduplicate by timestamp, sort chronologically (oldest first)
+    const seen = new Set();
+    const candles = allCandles
+      .filter(k => {
+        if (seen.has(k[0])) return false;
+        seen.add(k[0]);
+        return true;
+      })
+      .sort((a, b) => +a[0] - +b[0])
+      .map(k => ({
+        time: Math.floor(+k[0] / 1000),
+        open: +k[1],
+        high: +k[2],
+        low: +k[3],
+        close: +k[4],
+        volume: +k[5],
+      }))
+      .filter(c => c.open && c.close);
+
+    res.json({ instId, bar, pages: allCandles.length, candles });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// OKX instruments search (cached)
+let okxInstrumentsCache = null;
+let okxCacheTime = 0;
+app.get('/api/search/okx', async (req, res) => {
+  try {
+    const q = (req.query.q || '').toUpperCase();
+    if (q.length < 1) return res.json([]);
+
+    // Cache for 1 hour
+    if (!okxInstrumentsCache || Date.now() - okxCacheTime > 3600000) {
+      const data = await yahooFetch('https://www.okx.com/api/v5/public/instruments?instType=SPOT');
+      okxInstrumentsCache = (data.data || [])
+        .filter(i => i.instId.endsWith('-USDT') && i.state === 'live')
+        .map(i => ({ symbol: i.instId, base: i.baseCcy, name: i.baseCcy + '/USDT' }));
+      okxCacheTime = Date.now();
+    }
+
+    const results = okxInstrumentsCache
+      .filter(s => s.symbol.includes(q) || s.base.includes(q))
+      .slice(0, 15);
+    res.json(results);
+  } catch (e) { res.json([]); }
+});
+
+// Yahoo Finance OHLCV endpoint
+app.get('/api/yahoo/:symbol', async (req, res) => {
+  try {
+    const { symbol } = req.params;
+    const range = req.query.range || '1y';
+    const interval = req.query.interval || '1d';
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=${interval}&includePrePost=false`;
+    const data = await yahooFetch(url);
+
+    if (!data.chart?.result?.[0]) {
+      return res.status(404).json({ error: 'Symbol not found' });
+    }
+
+    const r = data.chart.result[0];
+    const ts = r.timestamp || [];
+    const q = r.indicators?.quote?.[0] || {};
+    const candles = ts.map((t, i) => ({
+      time: t,
+      open: q.open?.[i] || 0,
+      high: q.high?.[i] || 0,
+      low: q.low?.[i] || 0,
+      close: q.close?.[i] || 0,
+      volume: q.volume?.[i] || 0,
+    })).filter(c => c.open && c.close && c.high && c.low);
+
+    res.json({
+      symbol,
+      currency: r.meta?.currency || 'USD',
+      exchange: r.meta?.exchangeName || '',
+      name: r.meta?.shortName || symbol,
+      candles,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Symbol Search APIs ──
+// Yahoo Finance autocomplete
+app.get('/api/search/yahoo', async (req, res) => {
+  try {
+    const q = req.query.q || '';
+    if (q.length < 1) return res.json([]);
+    const url = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(q)}&quotesCount=12&newsCount=0&listsCount=0`;
+    const data = await yahooFetch(url);
+    const results = (data.quotes || [])
+      .filter(r => r.symbol && r.quoteType !== 'MUTUALFUND')
+      .map(r => ({
+        symbol: r.symbol,
+        name: r.shortname || r.longname || r.symbol,
+        type: r.quoteType || '',
+        exchange: r.exchange || '',
+      }));
+    res.json(results);
+  } catch (e) { res.json([]); }
+});
+
+// ── Strategy APIs ──
+app.get('/api/strategy', (req, res) => {
+  try { res.json(JSON.parse(fs.readFileSync(STRATEGY_FILE, 'utf8'))); }
+  catch (e) { res.status(500).json({ error: 'strategy.json not found' }); }
+});
+
+app.put('/api/strategy', (req, res) => {
+  try {
+    if (fs.existsSync(STRATEGY_FILE)) {
+      const cur = fs.readFileSync(STRATEGY_FILE, 'utf8');
+      const ts = new Date().toISOString().replace(/[:.]/g, '-');
+      fs.writeFileSync(path.join(HISTORY_DIR, `strategy-${ts}.json`), cur);
+    }
+    const s = req.body;
+    s._lastUpdate = new Date().toISOString().split('T')[0];
+    fs.writeFileSync(STRATEGY_FILE, JSON.stringify(s, null, 2));
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/strategy/history', (req, res) => {
+  try {
+    if (!fs.existsSync(HISTORY_DIR)) return res.json([]);
+    const files = fs.readdirSync(HISTORY_DIR).filter(f => f.endsWith('.json')).sort().reverse().slice(0, 20);
+    const history = files.map(f => {
+      const stat = fs.statSync(path.join(HISTORY_DIR, f));
+      let ver = '?';
+      try { ver = JSON.parse(fs.readFileSync(path.join(HISTORY_DIR, f), 'utf8'))._version || '?'; } catch {}
+      return { filename: f, date: stat.mtime.toISOString(), version: ver };
+    });
+    res.json(history);
+  } catch (e) { res.json([]); }
+});
+
+app.post('/api/strategy/rollback', (req, res) => {
+  try {
+    const { filename } = req.body;
+    const bp = path.join(HISTORY_DIR, filename);
+    if (!fs.existsSync(bp)) return res.status(404).json({ error: 'Not found' });
+    const cur = fs.readFileSync(STRATEGY_FILE, 'utf8');
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    fs.writeFileSync(path.join(HISTORY_DIR, `strategy-${ts}-pre-rollback.json`), cur);
+    fs.writeFileSync(STRATEGY_FILE, fs.readFileSync(bp, 'utf8'));
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.use(express.static(__dirname));
+app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
+app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Martingale Backtester running on port ${PORT}`));
