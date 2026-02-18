@@ -62,6 +62,56 @@ app.get('/api/yahoo/:symbol', async (req, res) => {
   }
 });
 
+// ── Symbol Search APIs ──
+// Yahoo Finance autocomplete
+app.get('/api/search/yahoo', async (req, res) => {
+  try {
+    const q = req.query.q || '';
+    if (q.length < 1) return res.json([]);
+    const url = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(q)}&quotesCount=12&newsCount=0&listsCount=0`;
+    const data = await yahooFetch(url);
+    const results = (data.quotes || [])
+      .filter(r => r.symbol && r.quoteType !== 'MUTUALFUND')
+      .map(r => ({
+        symbol: r.symbol,
+        name: r.shortname || r.longname || r.symbol,
+        type: r.quoteType || '',
+        exchange: r.exchange || '',
+      }));
+    res.json(results);
+  } catch (e) { res.json([]); }
+});
+
+// Binance symbol search (from exchange info, cached)
+let binanceSymbolsCache = null;
+let binanceCacheTime = 0;
+app.get('/api/search/binance', async (req, res) => {
+  try {
+    const q = (req.query.q || '').toUpperCase();
+    if (q.length < 1) return res.json([]);
+
+    // Cache for 1 hour
+    if (!binanceSymbolsCache || Date.now() - binanceCacheTime > 3600000) {
+      const data = await new Promise((resolve, reject) => {
+        https.get('https://api.binance.com/api/v3/exchangeInfo', (r) => {
+          let d = '';
+          r.on('data', c => d += c);
+          r.on('end', () => { try { resolve(JSON.parse(d)); } catch(e) { reject(e); } });
+        }).on('error', reject);
+      });
+      binanceSymbolsCache = (data.symbols || [])
+        .filter(s => s.status === 'TRADING' && s.quoteAsset === 'USDT')
+        .map(s => ({ symbol: s.symbol, base: s.baseAsset, name: s.baseAsset + '/USDT' }));
+      binanceCacheTime = Date.now();
+    }
+
+    const results = binanceSymbolsCache
+      .filter(s => s.symbol.includes(q) || s.base.includes(q))
+      .slice(0, 15);
+    res.json(results);
+  } catch (e) { res.json([]); }
+});
+
 // ── Strategy APIs ──
 app.get('/api/strategy', (req, res) => {
   try { res.json(JSON.parse(fs.readFileSync(STRATEGY_FILE, 'utf8'))); }
