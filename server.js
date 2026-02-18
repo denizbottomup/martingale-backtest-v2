@@ -1,44 +1,87 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
+const https = require('https');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-
 app.use(express.json({ limit: '1mb' }));
 
 const STRATEGY_FILE = path.join(__dirname, 'strategy.json');
 const HISTORY_DIR = path.join(__dirname, '.strategy-history');
-
 if (!fs.existsSync(HISTORY_DIR)) fs.mkdirSync(HISTORY_DIR, { recursive: true });
 
-// GET strategy
-app.get('/api/strategy', (req, res) => {
-  try {
-    res.json(JSON.parse(fs.readFileSync(STRATEGY_FILE, 'utf8')));
-  } catch (e) {
-    res.status(500).json({ error: 'strategy.json not found' });
-  }
-});
+// ── Yahoo Finance Proxy ──
+function yahooFetch(url) {
+  return new Promise((resolve, reject) => {
+    https.get(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, (res) => {
+      let data = '';
+      res.on('data', c => data += c);
+      res.on('end', () => {
+        try { resolve(JSON.parse(data)); }
+        catch (e) { reject(new Error('Yahoo parse error')); }
+      });
+    }).on('error', reject);
+  });
+}
 
-// PUT strategy (save + backup old)
-app.put('/api/strategy', (req, res) => {
+// Yahoo Finance OHLCV endpoint
+app.get('/api/yahoo/:symbol', async (req, res) => {
   try {
-    if (fs.existsSync(STRATEGY_FILE)) {
-      const current = fs.readFileSync(STRATEGY_FILE, 'utf8');
-      const ts = new Date().toISOString().replace(/[:.]/g, '-');
-      fs.writeFileSync(path.join(HISTORY_DIR, `strategy-${ts}.json`), current);
+    const { symbol } = req.params;
+    const range = req.query.range || '1y';
+    const interval = req.query.interval || '1d';
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=${interval}&includePrePost=false`;
+    const data = await yahooFetch(url);
+
+    if (!data.chart?.result?.[0]) {
+      return res.status(404).json({ error: 'Symbol not found' });
     }
-    const s = req.body;
-    s._lastUpdate = new Date().toISOString().split('T')[0];
-    fs.writeFileSync(STRATEGY_FILE, JSON.stringify(s, null, 2));
-    res.json({ success: true });
+
+    const r = data.chart.result[0];
+    const ts = r.timestamp || [];
+    const q = r.indicators?.quote?.[0] || {};
+    const candles = ts.map((t, i) => ({
+      time: t,
+      open: q.open?.[i] || 0,
+      high: q.high?.[i] || 0,
+      low: q.low?.[i] || 0,
+      close: q.close?.[i] || 0,
+      volume: q.volume?.[i] || 0,
+    })).filter(c => c.open && c.close && c.high && c.low);
+
+    res.json({
+      symbol,
+      currency: r.meta?.currency || 'USD',
+      exchange: r.meta?.exchangeName || '',
+      name: r.meta?.shortName || symbol,
+      candles,
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// GET version history
+// ── Strategy APIs ──
+app.get('/api/strategy', (req, res) => {
+  try { res.json(JSON.parse(fs.readFileSync(STRATEGY_FILE, 'utf8'))); }
+  catch (e) { res.status(500).json({ error: 'strategy.json not found' }); }
+});
+
+app.put('/api/strategy', (req, res) => {
+  try {
+    if (fs.existsSync(STRATEGY_FILE)) {
+      const cur = fs.readFileSync(STRATEGY_FILE, 'utf8');
+      const ts = new Date().toISOString().replace(/[:.]/g, '-');
+      fs.writeFileSync(path.join(HISTORY_DIR, `strategy-${ts}.json`), cur);
+    }
+    const s = req.body;
+    s._lastUpdate = new Date().toISOString().split('T')[0];
+    fs.writeFileSync(STRATEGY_FILE, JSON.stringify(s, null, 2));
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/strategy/history', (req, res) => {
   try {
     if (!fs.existsSync(HISTORY_DIR)) return res.json([]);
@@ -53,13 +96,11 @@ app.get('/api/strategy/history', (req, res) => {
   } catch (e) { res.json([]); }
 });
 
-// POST rollback
 app.post('/api/strategy/rollback', (req, res) => {
   try {
     const { filename } = req.body;
     const bp = path.join(HISTORY_DIR, filename);
     if (!fs.existsSync(bp)) return res.status(404).json({ error: 'Not found' });
-    // backup current before rollback
     const cur = fs.readFileSync(STRATEGY_FILE, 'utf8');
     const ts = new Date().toISOString().replace(/[:.]/g, '-');
     fs.writeFileSync(path.join(HISTORY_DIR, `strategy-${ts}-pre-rollback.json`), cur);
