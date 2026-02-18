@@ -72,6 +72,46 @@ return <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.8)",zIndex
 {!hist.length?<div style={{fontFamily:Fm,fontSize:11,color:P.ash}}>Henüz yok.</div>:<div style={{maxHeight:180,overflowY:"auto"}}>{hist.map((h,i)=><div key={i} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"7px 10px",background:i%2===0?P.card:"transparent",borderRadius:6,marginBottom:2}}><div><span style={{fontFamily:Fm,fontSize:11,color:P.mist}}>v{h.version}</span><span style={{fontFamily:Fm,fontSize:10,color:P.ash,marginLeft:8}}>{new Date(h.date).toLocaleString("tr-TR",{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"})}</span></div><button onClick={async()=>{setRb(true);try{await fetch('/api/strategy/rollback',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filename:h.filename})});onApply(await(await fetch('/api/strategy')).json());setHist(await(await fetch('/api/strategy/history')).json());}catch(e){setErr("Hata");}setRb(false);}} disabled={rb} style={{fontFamily:Fs,fontSize:10,fontWeight:600,padding:"4px 12px",borderRadius:6,background:"rgba(249,115,22,0.1)",border:"1px solid rgba(249,115,22,0.25)",color:P.ember,cursor:rb?"wait":"pointer"}}>{rb?"⏳":"↩ Geri Al"}</button></div>)}</div>}
 </div></div></div></div>;}
 
+function SymbolSearch({mkt,sym,onSelect,presets}){
+  const[open,setOpen]=useState(false);const[q,setQ]=useState('');const[results,setResults]=useState([]);const[loading,setLoading]=useState(false);const timer=useRef(null);const ref=useRef(null);
+  // Close on outside click
+  useEffect(()=>{const h=e=>{if(ref.current&&!ref.current.contains(e.target))setOpen(false);};document.addEventListener('mousedown',h);return()=>document.removeEventListener('mousedown',h);},[]);
+  // Search API with debounce
+  const search=useCallback(val=>{if(timer.current)clearTimeout(timer.current);if(!val||val.length<1){setResults([]);return;}
+    timer.current=setTimeout(async()=>{setLoading(true);try{
+      const endpoint=mkt==="crypto"?`/api/search/binance?q=${encodeURIComponent(val)}`:`/api/search/yahoo?q=${encodeURIComponent(val)}`;
+      const r=await fetch(endpoint);const data=await r.json();setResults(data.slice(0,10));
+    }catch(e){setResults([]);}setLoading(false);},300);
+  },[mkt]);
+  // Filter presets locally
+  const filtered=q?presets.filter(s=>s.toLowerCase().includes(q.toLowerCase())||((DN[s]||'').toLowerCase().includes(q.toLowerCase()))).slice(0,8):presets.slice(0,15);
+  const pick=s=>{onSelect(s);setOpen(false);setQ('');setResults([]);};
+  return <div ref={ref} style={{position:"relative"}}>
+    <button onClick={()=>setOpen(!open)} style={{fontFamily:Fm,fontSize:12,padding:"7px 12px",borderRadius:8,background:P.card,border:`1px solid ${open?P.violet:P.border}`,color:P.mist,cursor:"pointer",minWidth:100,textAlign:"left",fontWeight:600,display:"flex",alignItems:"center",gap:4,transition:"0.2s"}}>{dN(sym)}<span style={{color:P.ash,fontSize:10,marginLeft:"auto"}}>▾</span></button>
+    {open&&<div style={{position:"absolute",top:"100%",left:0,marginTop:4,width:280,background:P.card,border:`1px solid ${P.border}`,borderRadius:12,boxShadow:"0 12px 40px rgba(0,0,0,0.5)",zIndex:999,overflow:"hidden",animation:"fadeIn 0.15s"}}>
+      <div style={{padding:"8px 10px",borderBottom:`1px solid ${P.border}`}}>
+        <input value={q} onChange={e=>{setQ(e.target.value);search(e.target.value);}} placeholder={mkt==="crypto"?"BTC, SOL, DOGE...":mkt==="stocks"?"AAPL, TSLA, NVDA...":"Altın, Petrol, EUR..."} autoFocus style={{width:"100%",background:P.surface,border:`1px solid ${P.border}`,borderRadius:8,padding:"7px 10px",fontFamily:Fm,fontSize:12,color:P.mist,outline:"none"}}/>
+      </div>
+      <div style={{maxHeight:260,overflowY:"auto"}}>
+        {/* API search results */}
+        {q&&results.length>0&&<><div style={{padding:"4px 12px",fontFamily:Fm,fontSize:9,color:P.violet,letterSpacing:"0.1em",textTransform:"uppercase"}}>🔍 Arama Sonuçları</div>
+        {results.map((r,i)=><div key={'api-'+i} onClick={()=>pick(r.symbol)} style={{padding:"7px 12px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center",transition:"0.15s",background:"transparent"}} onMouseEnter={e=>e.currentTarget.style.background=P.surface} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+          <div><span style={{fontFamily:Fm,fontSize:12,color:P.white,fontWeight:600}}>{r.symbol}</span>{r.name&&r.name!==r.symbol&&<span style={{fontFamily:Fs,fontSize:10,color:P.ash,marginLeft:6}}>{r.name.slice(0,24)}</span>}</div>
+          {r.type&&<span style={{fontFamily:Fm,fontSize:9,color:P.ash,background:P.surface,padding:"1px 6px",borderRadius:4}}>{r.type==="EQUITY"?"Hisse":r.type==="CRYPTOCURRENCY"?"Kripto":r.type==="FUTURE"?"Vadeli":r.type==="ETF"?"ETF":r.exchange||r.type}</span>}
+        </div>)}</>}
+        {q&&loading&&<div style={{padding:"12px",fontFamily:Fm,fontSize:11,color:P.ash,textAlign:"center"}}>Aranıyor...</div>}
+        {/* Preset list */}
+        {filtered.length>0&&<><div style={{padding:"4px 12px",fontFamily:Fm,fontSize:9,color:P.ash,letterSpacing:"0.1em",textTransform:"uppercase",borderTop:q&&results.length?`1px solid ${P.border}`:"none"}}>{q?"Liste":"Popüler"}</div>
+        {filtered.map(s=><div key={'pre-'+s} onClick={()=>pick(s)} style={{padding:"6px 12px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center",background:s===sym?"rgba(123,92,245,0.08)":"transparent",transition:"0.15s"}} onMouseEnter={e=>{if(s!==sym)e.currentTarget.style.background=P.surface}} onMouseLeave={e=>{if(s!==sym)e.currentTarget.style.background=s===sym?"rgba(123,92,245,0.08)":"transparent"}}>
+          <span style={{fontFamily:Fm,fontSize:11,color:s===sym?P.violet:P.mist,fontWeight:s===sym?700:400}}>{dN(s)}</span>
+          {s===sym&&<span style={{fontSize:8,color:P.violet}}>●</span>}
+        </div>)}</>}
+        {q&&!loading&&!results.length&&!filtered.length&&<div style={{padding:"16px",textAlign:"center",fontFamily:Fs,fontSize:12,color:P.ash}}>Sonuç bulunamadı</div>}
+      </div>
+    </div>}
+  </div>;
+}
+
 function App(){
   const[cfg,setCfg]=useState(null);const[showTut,setShowTut]=useState(true);const[showDev,setShowDev]=useState(false);
   const[mkt,setMkt]=useState("crypto");const[sym,setSym]=useState("ETHUSDT");const[tf,setTf]=useState("1h");
@@ -104,7 +144,7 @@ function App(){
       <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
         {lP&&<div style={{fontFamily:Fm,fontSize:13,color:P.jade,display:"flex",alignItems:"center",gap:5,fontWeight:600}}><div style={{width:7,height:7,borderRadius:4,background:P.jade,animation:"pulse 2s infinite"}}/>${lP.toLocaleString("en")}</div>}
         <select value={mkt} onChange={e=>changeMkt(e.target.value)} style={{fontWeight:600,background:mkt==="crypto"?"rgba(123,92,245,0.15)":mkt==="stocks"?"rgba(45,199,113,0.15)":"rgba(249,115,22,0.15)"}}>{cfg?.markets?Object.entries(cfg.markets).map(([k,v])=><option key={k} value={k}>{v.label}</option>):<><option value="crypto">🪙 Kripto</option><option value="stocks">📈 Hisse</option><option value="commodities">🏗️ Emtia</option></>}</select>
-        <select value={sym} onChange={e=>{setSym(e.target.value);getSD(e.target.value,tf);}}>{syms.map(s=><option key={s} value={s}>{dN(s)}</option>)}</select>
+        <SymbolSearch mkt={mkt} sym={sym} presets={syms} onSelect={s=>{setSym(s);getSD(s,tf);}}/>
         <select value={tf} onChange={e=>{setTf(e.target.value);getSD(sym,e.target.value);}}>{tfs.map(t=><option key={t.value} value={t.value}>{t.label}</option>)}</select>
         <button onClick={run} disabled={st==="loading"} style={{fontFamily:Fs,fontSize:12,fontWeight:700,padding:"7px 18px",borderRadius:10,background:st==="loading"?"#2A2D3A":`linear-gradient(135deg,${P.violet},${P.cobalt})`,border:"none",color:P.white,cursor:st==="loading"?"wait":"pointer",boxShadow:st!=="loading"?`0 4px 20px ${P.violet}40`:"none"}}>{st==="loading"?"⏳":"▶ RUN"}</button>
         <button onClick={()=>setShowDev(true)} style={{fontFamily:Fm,fontSize:11,padding:"7px 12px",borderRadius:8,background:"rgba(249,115,22,0.1)",border:"1px solid rgba(249,115,22,0.25)",color:P.ember,cursor:"pointer",fontWeight:600}}>&lt;/&gt;</button>
