@@ -3,146 +3,237 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Martingale V2 Backtest — Binance Real Data</title>
-<meta name="description" content="Pine Script Martingale strategy backtester with live Binance data">
+<title>Martingale V2 Backtest — BottomUP</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='28' font-size='28'>📊</text></svg>">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Display:wght@400;600;700&family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 html,body,#root{height:100%;width:100%;overflow:hidden}
-body{background:#0A0B0F;color:#D4D6DD;font-family:system-ui,sans-serif}
-::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:#0A0B0F}::-webkit-scrollbar-thumb{background:#2A2D3A;border-radius:2px}
-input[type=range]{-webkit-appearance:none;background:#2A2D3A;border-radius:2px;outline:none;height:3px;width:100%}
-input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;background:#7B5CF5;cursor:pointer}
-select{background:#111318;color:#D4D6DD;border:1px solid #1C1F2A;border-radius:6px;padding:6px 8px;font-family:'Courier New',monospace;font-size:11px;outline:none;cursor:pointer}
-select:focus{border-color:#7B5CF5}
+body{background:#13151C;color:#F3F4F6;font-family:'DM Sans',system-ui,sans-serif}
+::-webkit-scrollbar{width:5px}::-webkit-scrollbar-track{background:#13151C}::-webkit-scrollbar-thumb{background:#2A2D3A;border-radius:3px}::-webkit-scrollbar-thumb:hover{background:#7B5CF5}
+input[type=range]{-webkit-appearance:none;background:rgba(123,92,245,0.15);border-radius:3px;outline:none;height:4px;width:100%;transition:0.2s}
+input[type=range]:hover{background:rgba(123,92,245,0.25)}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:#7B5CF5;cursor:pointer;box-shadow:0 0 8px rgba(123,92,245,0.4)}
+select{background:#1A1D26;color:#F3F4F6;border:1px solid rgba(123,92,245,0.2);border-radius:8px;padding:7px 10px;font-family:'DM Sans',sans-serif;font-size:12px;font-weight:500;outline:none;cursor:pointer;transition:0.2s}
+select:hover{border-color:rgba(123,92,245,0.4)}select:focus{border-color:#7B5CF5;box-shadow:0 0 0 2px rgba(123,92,245,0.15)}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 @keyframes spin{to{transform:rotate(360deg)}}
+@keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+.tab-btn{font-family:'DM Sans',sans-serif;font-size:11px;font-weight:600;padding:7px 16px;border-radius:8px;border:1px solid rgba(123,92,245,0.12);cursor:pointer;transition:all 0.2s;background:transparent;color:#6B7280}
+.tab-btn:hover{border-color:rgba(123,92,245,0.3)}
+.tab-btn.active{background:rgba(123,92,245,0.1);border-color:rgba(123,92,245,0.4);color:#7B5CF5}
 </style>
 </head>
 <body>
 <div id="root"></div>
 <script type="text/babel">
 const{useState,useEffect,useCallback,useRef}=React;
-const C={bg:"#0A0B0F",card:"#111318",border:"#1C1F2A",text:"#D4D6DD",muted:"#5C6070",dim:"#2A2D3A",green:"#22C55E",red:"#EF4444",violet:"#7B5CF5",blue:"#3B82F6",amber:"#F59E0B",cyan:"#06B6D4"};
-const MN="'Courier New',monospace";
+const LWC=window.LightweightCharts||window.lightweightCharts;
+
+const P={
+  violet:"#7B5CF5",ember:"#F97316",jade:"#2DC771",danger:"#EF4444",
+  cobalt:"#3B5BF5",ink:"#13151C",ash:"#6B7280",mist:"#F3F4F6",white:"#FFFFFF",
+  card:"#1A1D26",surface:"#1E2130",border:"rgba(123,92,245,0.12)",
+};
+const Fd="'Cormorant Display',Georgia,serif";
+const Fs="'DM Sans',system-ui,sans-serif";
+const Fm="'JetBrains Mono',monospace";
 
 const SYMS=["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT","DOGEUSDT","ADAUSDT","AVAXUSDT","DOTUSDT","LINKUSDT","MATICUSDT","UNIUSDT","ATOMUSDT","NEARUSDT","LTCUSDT","APTUSDT","ARBUSDT","OPUSDT","SUIUSDT","SEIUSDT","INJUSDT","TIAUSDT","TONUSDT","PEPEUSDT","WIFUSDT","TRXUSDT"];
 const TFS=[{l:"15m",v:"15m",n:500},{l:"1h",v:"1h",n:500},{l:"4h",v:"4h",n:500},{l:"1d",v:"1d",n:365},{l:"1w",v:"1w",n:200}];
 
-// ── Binance API ──
+// ── Binance REST ──
 async function fetchK(sym,intv,lim){
   const r=await fetch(`https://api.binance.com/api/v3/klines?symbol=${sym}&interval=${intv}&limit=${lim}`);
   if(!r.ok)throw new Error(`Binance API ${r.status}`);
-  return(await r.json()).map((k,i)=>({i,o:+k[1],h:+k[2],l:+k[3],c:+k[4],
-    label:new Date(k[0]).toLocaleDateString("tr-TR",{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}),
-    short:new Date(k[0]).toLocaleDateString("tr-TR",{month:"short",day:"numeric"})}));
+  return(await r.json()).map(k=>({time:Math.floor(k[0]/1000),open:+k[1],high:+k[2],low:+k[3],close:+k[4],volume:+k[5]}));
 }
 
 // ── Indicators ──
-function atr(b,x,len){if(x<1)return b[0].h-b[0].l;let s=0,n=0;for(let i=Math.max(1,x-len+1);i<=x;i++){s+=Math.max(b[i].h-b[i].l,Math.abs(b[i].h-b[i-1].c),Math.abs(b[i].l-b[i-1].c));n++;}return n?s/n:b[x].h-b[x].l;}
-function ema(b,x,len){const k=2/(len+1);let e=b[0].c;for(let i=1;i<=x;i++)e=b[i].c*k+e*(1-k);return e;}
-function rsi(b,x,len=14){if(x<len)return 50;let g=0,lo=0;for(let i=x-len+1;i<=x;i++){const d=b[i].c-b[i-1].c;if(d>0)g+=d;else lo-=d;}return lo===0?100:100-100/(1+g/lo);}
+function _atr(b,x,len){if(x<1)return b[0].high-b[0].low;let s=0,n=0;for(let i=Math.max(1,x-len+1);i<=x;i++){s+=Math.max(b[i].high-b[i].low,Math.abs(b[i].high-b[i-1].close),Math.abs(b[i].low-b[i-1].close));n++;}return n?s/n:0;}
+function _ema(b,x,len){const k=2/(len+1);let e=b[0].close;for(let i=1;i<=x;i++)e=b[i].close*k+e*(1-k);return e;}
+function _rsi(b,x,len=14){if(x<len)return 50;let g=0,lo=0;for(let i=x-len+1;i<=x;i++){const d=b[i].close-b[i-1].close;if(d>0)g+=d;else lo-=d;}return lo===0?100:100-100/(1+g/lo);}
 
 // ── Backtest Engine ──
 function backtest(bars,cfg){
   const{al,man,mA,mP,aL,pD,rOn,rV,eOn}=cfg;const I=10000;
-  let cash=I,pos=[],trades=[],eq=[];let peak=I,mDD=0;
+  let cash=I,pos=[],trades=[],eqData=[];let peak=I,mDD=0;
+  // entries: [{time,price,layer}], exits: [{time,price,reason}]
+  let entries=[],exits=[];
+
   for(let i=1;i<bars.length;i++){
-    const p=bars[i].c,a=atr(bars,i,aL),e10=ema(bars,i,10),r=rsi(bars,i);
+    const p=bars[i].close,a=_atr(bars,i,aL),e10=_ema(bars,i,10),r=_rsi(bars,i);
     const fA=man?mA:a,fT=man?mP:a/pD,eS=eOn?p<e10:true,rO=rOn?r<rV:true;
     const pV=pos.reduce((s,x)=>s+x.q*p,0),curE=cash+pV;
-    if(!pos.length&&eS&&rO){const amt=curE*(al[0]/100);if(amt>1&&cash>=amt){pos.push({q:amt/p,ep:p});cash-=amt;}}
-    else if(pos.length>0&&pos.length<5){const lE=pos[pos.length-1].ep;if(p<lE-fA&&eS){const e2=cash+pos.reduce((s,x)=>s+x.q*p,0),amt=e2*(al[pos.length]/100);if(amt>1&&cash>=amt){pos.push({q:amt/p,ep:p});cash-=amt;}}}
-    if(pos.length>0){const tQ=pos.reduce((s,x)=>s+x.q,0),tC=pos.reduce((s,x)=>s+x.q*x.ep,0),aP=tC/tQ,rE=rOn&&r>rV;
-      if(p>=aP+fT||rE){const eV=tQ*p,pnl=eV-tC;trades.push({bar:i,label:bars[i].label,ae:+aP.toFixed(2),ex:+p.toFixed(2),ly:pos.length,pnl:+pnl.toFixed(2),pp:+((pnl/tC)*100).toFixed(2),rs:rE?"RSI":"TP",at:+fA.toFixed(2)});cash+=eV;pos=[];}}
-    const cE=cash+pos.reduce((s,x)=>s+x.q*p,0);if(cE>peak)peak=cE;const dd=((peak-cE)/peak)*100;if(dd>mDD)mDD=dd;
-    const step=Math.max(1,Math.floor(bars.length/200));
-    if(i%step===0||i===bars.length-1)eq.push({i,label:bars[i].short,eq:+cE.toFixed(2),price:p,dd:+dd.toFixed(2),layers:pos.length});
+
+    // ENTRY
+    if(!pos.length&&eS&&rO){
+      const amt=curE*(al[0]/100);
+      if(amt>1&&cash>=amt){pos.push({q:amt/p,ep:p});cash-=amt;entries.push({time:bars[i].time,price:p,layer:1});}
+    } else if(pos.length>0&&pos.length<5){
+      const lE=pos[pos.length-1].ep;
+      if(p<lE-fA&&eS){
+        const e2=cash+pos.reduce((s,x)=>s+x.q*p,0),amt=e2*(al[pos.length]/100);
+        if(amt>1&&cash>=amt){pos.push({q:amt/p,ep:p});cash-=amt;entries.push({time:bars[i].time,price:p,layer:pos.length});}
+      }
+    }
+
+    // EXIT
+    if(pos.length>0){
+      const tQ=pos.reduce((s,x)=>s+x.q,0),tC=pos.reduce((s,x)=>s+x.q*x.ep,0),aP=tC/tQ,rE=rOn&&r>rV;
+      if(p>=aP+fT||rE){
+        const eV=tQ*p,pnl=eV-tC;
+        trades.push({bar:i,time:bars[i].time,ae:+aP.toFixed(2),ex:+p.toFixed(2),ly:pos.length,pnl:+pnl.toFixed(2),pp:+((pnl/tC)*100).toFixed(2),rs:rE?"RSI":"TP",at:+fA.toFixed(2)});
+        exits.push({time:bars[i].time,price:p,reason:rE?"RSI":"TP",pnl:+pnl.toFixed(2)});
+        cash+=eV;pos=[];
+      }
+    }
+
+    const cE=cash+pos.reduce((s,x)=>s+x.q*p,0);
+    if(cE>peak)peak=cE;const dd=((peak-cE)/peak)*100;if(dd>mDD)mDD=dd;
+    eqData.push({time:bars[i].time,value:+cE.toFixed(2)});
   }
-  const fE=cash+pos.reduce((s,x)=>s+x.q*bars[bars.length-1].c,0);
+
+  const fE=cash+pos.reduce((s,x)=>s+x.q*bars[bars.length-1].close,0);
   const w=trades.filter(t=>t.pnl>0),lo=trades.filter(t=>t.pnl<=0);
   const gW=w.reduce((s,t)=>s+t.pnl,0),gL=Math.abs(lo.reduce((s,t)=>s+t.pnl,0));
-  return{trades,eq,s:{fE:+fE.toFixed(2),ret:+(((fE-I)/I)*100).toFixed(2),cnt:trades.length,wr:trades.length?+((w.length/trades.length)*100).toFixed(1):0,mDD:+mDD.toFixed(2),pf:gL>0?+(gW/gL).toFixed(2):w.length?999:0,aW:w.length?+(gW/w.length).toFixed(2):0,aL:lo.length?+(-gL/lo.length).toFixed(2):0,aLy:trades.length?+(trades.reduce((s,t)=>s+t.ly,0)/trades.length).toFixed(1):0,oL:pos.length,best:trades.length?+Math.max(...trades.map(t=>t.pnl)).toFixed(2):0,worst:trades.length?+Math.min(...trades.map(t=>t.pnl)).toFixed(2):0}};
+
+  return{trades,eqData,entries,exits,s:{
+    fE:+fE.toFixed(2),ret:+(((fE-I)/I)*100).toFixed(2),cnt:trades.length,
+    wr:trades.length?+((w.length/trades.length)*100).toFixed(1):0,
+    mDD:+mDD.toFixed(2),pf:gL>0?+(gW/gL).toFixed(2):w.length?999:0,
+    aW:w.length?+(gW/w.length).toFixed(2):0,aL:lo.length?+(-gL/lo.length).toFixed(2):0,
+    aLy:trades.length?+(trades.reduce((s,t)=>s+t.ly,0)/trades.length).toFixed(1):0,
+    oL:pos.length,best:trades.length?+Math.max(...trades.map(t=>t.pnl)).toFixed(2):0,
+    worst:trades.length?+Math.min(...trades.map(t=>t.pnl)).toFixed(2):0,
+  }};
 }
 
-// ── SVG Chart Component ──
-function Chart({data,dataKey,color,fillColor,refLine,reversed,w=700,h=260}){
-  if(!data||!data.length)return null;
-  const vals=data.map(d=>d[dataKey]).filter(v=>typeof v==="number");
-  if(!vals.length)return null;
-  let minV=Math.min(...vals),maxV=Math.max(...vals);
-  if(reversed){const t=minV;minV=0;maxV=Math.max(...vals)*1.1;}
-  if(maxV===minV){maxV+=1;minV-=1;}
-  const pad={t:20,r:60,b:30,l:10};
-  const cw=w-pad.l-pad.r,ch=h-pad.t-pad.b;
-  const sx=i=>(pad.l+(i/(data.length-1))*cw);
-  const sy=v=>reversed?(pad.t+((v-minV)/(maxV-minV))*ch):(pad.t+ch-((v-minV)/(maxV-minV))*ch);
-  const pts=data.map((d,i)=>`${sx(i)},${sy(d[dataKey])}`).join(" ");
-  const areaPts=pts+` ${sx(data.length-1)},${sy(reversed?minV:minV)} ${sx(0)},${sy(reversed?minV:minV)}`;
-  const ticks=5;const yLabels=[];
-  for(let i=0;i<=ticks;i++){const v=minV+(maxV-minV)*(i/ticks);yLabels.push({y:sy(v),v:v>=1000?`${(v/1000).toFixed(1)}k`:v.toFixed(v<1?4:v<100?1:0)});}
-  const labelStep=Math.floor(data.length/5);
-  const xLabels=data.filter((_,i)=>i%labelStep===0).map((d,i)=>({x:sx(i*labelStep),label:d.label}));
+// ── TradingView Chart Component ──
+function TVChart({bars,entries,exits,eqData,tab}){
+  const containerRef=useRef(null);
+  const chartRef=useRef(null);
 
-  const[hover,setHover]=useState(null);
-  const svgRef=useRef(null);
-  const onMove=useCallback((e)=>{
-    const rect=svgRef.current?.getBoundingClientRect();if(!rect)return;
-    const mx=e.clientX-rect.left;const idx=Math.round(((mx-pad.l)/cw)*(data.length-1));
-    if(idx>=0&&idx<data.length)setHover(idx);
-  },[data,cw,pad.l]);
+  useEffect(()=>{
+    if(!containerRef.current||!LWC)return;
+    // Cleanup previous chart
+    if(chartRef.current){try{chartRef.current.remove();}catch{}}
+    containerRef.current.innerHTML='';
 
-  return(
-    <svg ref={svgRef} width="100%" height={h} viewBox={`0 0 ${w} ${h}`} style={{display:"block"}} onMouseMove={onMove} onMouseLeave={()=>setHover(null)}>
-      {/* Grid */}
-      {yLabels.map((yl,i)=><line key={i} x1={pad.l} x2={w-pad.r} y1={yl.y} y2={yl.y} stroke={C.border} strokeDasharray="3 6"/>)}
-      {/* Y labels */}
-      {yLabels.map((yl,i)=><text key={`yt${i}`} x={w-pad.r+5} y={yl.y+4} fill={C.muted} fontSize={9} fontFamily={MN}>{yl.v}</text>)}
-      {/* X labels */}
-      {xLabels.map((xl,i)=><text key={`xl${i}`} x={xl.x} y={h-5} fill={C.muted} fontSize={8} fontFamily={MN} textAnchor="middle">{xl.label}</text>)}
-      {/* Ref line */}
-      {refLine!=null&&<><line x1={pad.l} x2={w-pad.r} y1={sy(refLine)} y2={sy(refLine)} stroke={C.dim} strokeDasharray="4 4"/><text x={w-pad.r+5} y={sy(refLine)+4} fill={C.muted} fontSize={8} fontFamily={MN}>${(refLine/1000).toFixed(0)}k</text></>}
-      {/* Area fill */}
-      {fillColor&&<polygon points={areaPts} fill={fillColor} opacity={0.15}/>}
-      {/* Line */}
-      <polyline points={pts} fill="none" stroke={color} strokeWidth={2} strokeLinejoin="round"/>
-      {/* Hover */}
-      {hover!=null&&hover<data.length&&<>
-        <line x1={sx(hover)} x2={sx(hover)} y1={pad.t} y2={pad.t+ch} stroke={C.muted} strokeDasharray="2 2" opacity={0.5}/>
-        <circle cx={sx(hover)} cy={sy(data[hover][dataKey])} r={4} fill={color} stroke={C.bg} strokeWidth={2}/>
-        <rect x={sx(hover)-55} y={pad.t-2} width={110} height={38} rx={4} fill="#181A22" stroke={C.border}/>
-        <text x={sx(hover)} y={pad.t+12} fill={C.muted} fontSize={9} fontFamily={MN} textAnchor="middle">{data[hover].label}</text>
-        <text x={sx(hover)} y={pad.t+26} fill={color} fontSize={11} fontFamily={MN} textAnchor="middle" fontWeight="bold">
-          {dataKey==="price"?"$":""}{data[hover][dataKey].toLocaleString("en",{maximumFractionDigits:2})}{dataKey==="dd"?"%":""}
-        </text>
-      </>}
-    </svg>
-  );
+    const chart=LWC.createChart(containerRef.current,{
+      width:containerRef.current.clientWidth,
+      height:380,
+      layout:{background:{type:'solid',color:P.card},textColor:P.ash,fontFamily:Fm,fontSize:11},
+      grid:{vertLines:{color:'rgba(123,92,245,0.06)'},horzLines:{color:'rgba(123,92,245,0.06)'}},
+      crosshair:{mode:0,vertLine:{color:P.violet+'44',width:1,style:2,labelBackgroundColor:P.violet},horzLine:{color:P.violet+'44',width:1,style:2,labelBackgroundColor:P.violet}},
+      rightPriceScale:{borderColor:P.border,scaleMargins:{top:0.1,bottom:0.1}},
+      timeScale:{borderColor:P.border,timeVisible:true,secondsVisible:false},
+      handleScroll:true,handleScale:true,
+    });
+    chartRef.current=chart;
+
+    if(tab==="candles"&&bars?.length){
+      // Candlestick series
+      const candleSeries=chart.addCandlestickSeries({
+        upColor:P.jade,downColor:P.danger,borderUpColor:P.jade,borderDownColor:P.danger,
+        wickUpColor:P.jade+'99',wickDownColor:P.danger+'99',
+      });
+      candleSeries.setData(bars);
+
+      // Volume
+      const volSeries=chart.addHistogramSeries({
+        priceFormat:{type:'volume'},priceScaleId:'vol',
+        color:P.violet+'22',
+      });
+      chart.priceScale('vol').applyOptions({scaleMargins:{top:0.85,bottom:0}});
+      volSeries.setData(bars.map(b=>({time:b.time,value:b.volume,color:b.close>=b.open?P.jade+'33':P.danger+'33'})));
+
+      // Buy markers (entries)
+      if(entries?.length){
+        const buyMarkers=entries.map(e=>({
+          time:e.time,position:'belowBar',color:P.jade,
+          shape:'arrowUp',text:`B${e.layer} $${e.price.toFixed(2)}`
+        }));
+        candleSeries.setMarkers(buyMarkers.concat(
+          (exits||[]).map(x=>({
+            time:x.time,position:'aboveBar',
+            color:x.pnl>=0?P.jade:P.danger,
+            shape:'arrowDown',
+            text:`${x.reason} ${x.pnl>=0?'+':''}$${x.pnl.toFixed(0)}`
+          }))
+        ).sort((a,b)=>a.time-b.time));
+      }
+    }
+
+    if(tab==="equity"&&eqData?.length){
+      const eqSeries=chart.addAreaSeries({
+        topColor:P.violet+'33',bottomColor:P.violet+'05',
+        lineColor:P.violet,lineWidth:2,
+        priceFormat:{type:'custom',formatter:v=>'$'+v.toFixed(0)},
+      });
+      eqSeries.setData(eqData);
+
+      // $10k reference line
+      const refSeries=chart.addLineSeries({
+        color:P.ash+'44',lineWidth:1,lineStyle:2,
+        priceFormat:{type:'custom',formatter:()=>'$10k'},
+      });
+      refSeries.setData(eqData.map(d=>({time:d.time,value:10000})));
+    }
+
+    if(tab==="drawdown"&&eqData?.length){
+      // Calculate drawdown series from equity
+      let peak=10000;
+      const ddData=eqData.map(d=>{
+        if(d.value>peak)peak=d.value;
+        return{time:d.time,value:+((peak-d.value)/peak*100).toFixed(2)};
+      });
+      const ddSeries=chart.addAreaSeries({
+        topColor:P.danger+'33',bottomColor:P.danger+'05',
+        lineColor:P.danger,lineWidth:2,invertFilledArea:true,
+        priceFormat:{type:'custom',formatter:v=>v.toFixed(1)+'%'},
+      });
+      ddSeries.setData(ddData);
+    }
+
+    chart.timeScale().fitContent();
+
+    const ro=new ResizeObserver(()=>{
+      if(containerRef.current)chart.applyOptions({width:containerRef.current.clientWidth});
+    });
+    ro.observe(containerRef.current);
+    return()=>{ro.disconnect();try{chart.remove();}catch{}};
+  },[bars,entries,exits,eqData,tab]);
+
+  return <div ref={containerRef} style={{width:"100%",borderRadius:12,overflow:"hidden"}}/>;
 }
 
-// ── Small UI ──
+// ── UI Components ──
 const Stat=({l,v,color,pre="",suf=""})=>(
-  <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 12px",flex:"1 1 115px",minWidth:100}}>
-    <div style={{fontFamily:MN,fontSize:9,color:C.muted,letterSpacing:"0.08em",textTransform:"uppercase",marginBottom:4}}>{l}</div>
-    <div style={{fontFamily:MN,fontSize:15,fontWeight:700,color:color||C.text,lineHeight:1.2}}>{pre}{typeof v==="number"?v.toLocaleString("en",{maximumFractionDigits:2}):v}{suf}</div>
+  <div style={{background:P.card,border:`1px solid ${P.border}`,borderRadius:12,padding:"12px 14px",flex:"1 1 120px",minWidth:105,animation:"fadeIn 0.3s",transition:"border-color 0.2s"}}
+    onMouseEnter={e=>e.currentTarget.style.borderColor='rgba(123,92,245,0.25)'}
+    onMouseLeave={e=>e.currentTarget.style.borderColor=P.border}>
+    <div style={{fontFamily:Fm,fontSize:9,color:P.ash,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:6}}>{l}</div>
+    <div style={{fontFamily:Fm,fontSize:16,fontWeight:600,color:color||P.mist}}>{pre}{typeof v==="number"?v.toLocaleString("en",{maximumFractionDigits:2}):v}{suf}</div>
   </div>
 );
 const Sld=({l,v,set,min,max,step=1,suf=""})=>(
-  <div style={{marginBottom:9}}>
-    <div style={{display:"flex",justifyContent:"space-between",marginBottom:2}}>
-      <span style={{fontFamily:MN,fontSize:10,color:C.muted}}>{l}</span>
-      <span style={{fontFamily:MN,fontSize:10,color:C.violet}}>{v}{suf}</span>
+  <div style={{marginBottom:10}}>
+    <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
+      <span style={{fontFamily:Fs,fontSize:11,color:P.ash,fontWeight:500}}>{l}</span>
+      <span style={{fontFamily:Fm,fontSize:11,color:P.violet,fontWeight:600}}>{v}{suf}</span>
     </div>
     <input type="range" min={min} max={max} step={step} value={v} onChange={e=>set(+e.target.value)}/>
   </div>
 );
 const Tog=({l,v,set})=>(
-  <label style={{display:"flex",alignItems:"center",gap:6,fontFamily:MN,fontSize:10,color:C.muted,marginBottom:6,cursor:"pointer"}}>
-    <div onClick={()=>set(!v)} style={{width:32,height:18,borderRadius:9,background:v?C.violet:C.dim,position:"relative",flexShrink:0,transition:"0.2s"}}>
-      <div style={{width:14,height:14,borderRadius:7,background:"#fff",position:"absolute",top:2,left:v?16:2,transition:"0.2s"}}/>
+  <label style={{display:"flex",alignItems:"center",gap:8,fontFamily:Fs,fontSize:11,color:P.ash,marginBottom:8,cursor:"pointer",fontWeight:500}}>
+    <div onClick={()=>set(!v)} style={{width:36,height:20,borderRadius:10,background:v?P.violet:"#2A2D3A",position:"relative",flexShrink:0,transition:"0.25s",boxShadow:v?`0 0 10px ${P.violet}33`:"none"}}>
+      <div style={{width:16,height:16,borderRadius:8,background:P.white,position:"absolute",top:2,left:v?18:2,transition:"0.25s",boxShadow:"0 1px 3px rgba(0,0,0,0.3)"}}/>
     </div>{l}
   </label>
 );
@@ -155,7 +246,7 @@ function App(){
   const[aL,setAL]=useState(14);const[pD,setPD]=useState(2);
   const[rOn,setROn]=useState(false);const[rV,setRV]=useState(71);const[eOn,setEOn]=useState(true);
   const[res,setRes]=useState(null);const[bars,setBars]=useState(null);
-  const[tab,setTab]=useState("equity");const[st,setSt]=useState("idle");
+  const[tab,setTab]=useState("candles");const[st,setSt]=useState("idle");
   const[lP,setLP]=useState(null);const[err,setErr]=useState(null);const ws=useRef(null);
 
   const sDef=useCallback((s,t)=>{
@@ -179,128 +270,136 @@ function App(){
     try{const w=new WebSocket(`wss://stream.binance.com:9443/ws/${sym.toLowerCase()}@trade`);w.onmessage=e=>{try{setLP(+parseFloat(JSON.parse(e.data).p).toFixed(4));}catch{}};ws.current=w;}catch{}
     return()=>{if(ws.current)ws.current.close();};
   },[sym]);
-
   useEffect(()=>{run();},[]);
 
-  const s=res?.s;const rc=s?(s.ret>=0?C.green:C.red):C.text;const aT=a1+a2+a3+a4+a5;
+  const s=res?.s;const rc=s?(s.ret>=0?P.jade:P.danger):P.mist;const aT=a1+a2+a3+a4+a5;
 
   return(
-    <div style={{minHeight:"100vh",background:C.bg,color:C.text,fontFamily:"system-ui,sans-serif"}}>
+    <div style={{minHeight:"100vh",background:P.ink,color:P.mist,fontFamily:Fs}}>
       {/* HEADER */}
-      <div style={{padding:"12px 16px",borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
-        <div>
-          <h1 style={{fontFamily:"Georgia,serif",fontSize:18,fontWeight:700}}>Martingale V2 Backtest</h1>
-          <p style={{fontFamily:MN,fontSize:9,color:C.muted}}>BINANCE REAL DATA • PINE SCRIPT ENGINE</p>
+      <div style={{padding:"12px 20px",borderBottom:`1px solid ${P.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:10,background:`linear-gradient(180deg,${P.card},${P.ink})`}}>
+        <div style={{display:"flex",alignItems:"center",gap:12}}>
+          <div style={{width:34,height:34,borderRadius:10,background:`linear-gradient(135deg,${P.violet},${P.cobalt})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:17,boxShadow:`0 4px 15px ${P.violet}33`}}>📊</div>
+          <div>
+            <h1 style={{fontFamily:Fd,fontSize:22,fontWeight:700,color:P.white}}>Martingale <span style={{color:P.violet}}>V2</span></h1>
+            <p style={{fontFamily:Fm,fontSize:9,color:P.ash,letterSpacing:"0.08em"}}>BINANCE • TRADINGVIEW CHARTS • PINE SCRIPT ENGINE</p>
+          </div>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-          {lP&&<div style={{fontFamily:MN,fontSize:13,color:C.green,display:"flex",alignItems:"center",gap:4}}><div style={{width:6,height:6,borderRadius:3,background:C.green,animation:"pulse 2s infinite"}}/>${lP.toLocaleString("en")}</div>}
+          {lP&&<div style={{fontFamily:Fm,fontSize:14,color:P.jade,display:"flex",alignItems:"center",gap:5,fontWeight:600}}>
+            <div style={{width:7,height:7,borderRadius:4,background:P.jade,animation:"pulse 2s infinite",boxShadow:`0 0 8px ${P.jade}66`}}/>${lP.toLocaleString("en")}
+          </div>}
           <select value={sym} onChange={e=>{setSym(e.target.value);sDef(e.target.value,tf);}}>{SYMS.map(s=><option key={s} value={s}>{s.replace("USDT","/USDT")}</option>)}</select>
           <select value={tf} onChange={e=>{setTf(e.target.value);sDef(sym,e.target.value);}}>{TFS.map(t=><option key={t.v} value={t.v}>{t.l}</option>)}</select>
-          <button onClick={run} disabled={st==="loading"} style={{fontFamily:MN,fontSize:10,fontWeight:700,padding:"6px 16px",borderRadius:6,background:st==="loading"?C.dim:C.violet,border:"none",color:"#fff",cursor:st==="loading"?"wait":"pointer"}}>{st==="loading"?"⏳":"▶ RUN"}</button>
+          <button onClick={run} disabled={st==="loading"} style={{fontFamily:Fs,fontSize:12,fontWeight:700,padding:"8px 22px",borderRadius:10,background:st==="loading"?"#2A2D3A":`linear-gradient(135deg,${P.violet},${P.cobalt})`,border:"none",color:P.white,cursor:st==="loading"?"wait":"pointer",boxShadow:st==="loading"?"none":`0 4px 20px ${P.violet}40`,transition:"0.2s",letterSpacing:"0.03em"}}>{st==="loading"?"⏳":"▶  RUN"}</button>
         </div>
       </div>
 
-      {err&&<div style={{margin:"8px 16px",padding:"8px 12px",background:C.red+"15",border:`1px solid ${C.red}33`,borderRadius:6,fontFamily:MN,fontSize:11,color:C.red}}>⚠ {err}</div>}
+      {err&&<div style={{margin:"10px 20px",padding:"10px 14px",background:"rgba(239,68,68,0.08)",border:"1px solid rgba(239,68,68,0.2)",borderRadius:10,fontFamily:Fm,fontSize:12,color:P.danger}}>⚠ {err}</div>}
 
-      <div style={{display:"flex",height:"calc(100vh - 52px)"}}>
+      <div style={{display:"flex",height:"calc(100vh - 58px)"}}>
         {/* SIDEBAR */}
-        <div style={{width:230,minWidth:230,borderRight:`1px solid ${C.border}`,padding:12,overflowY:"auto"}}>
-          <div style={{fontFamily:MN,fontSize:9,color:C.violet,letterSpacing:"0.1em",marginBottom:6,textTransform:"uppercase"}}>Allocation %</div>
-          <Sld l="Pos 1" v={a1} set={sA1} min={1} max={50} suf="%"/>
-          <Sld l="Pos 2" v={a2} set={sA2} min={1} max={50} suf="%"/>
-          <Sld l="Pos 3" v={a3} set={sA3} min={1} max={50} suf="%"/>
-          <Sld l="Pos 4" v={a4} set={sA4} min={1} max={50} suf="%"/>
-          <Sld l="Pos 5" v={a5} set={sA5} min={1} max={50} suf="%"/>
-          <div style={{fontFamily:MN,fontSize:10,color:aT===100?C.green:C.amber,marginBottom:4}}>Total: {aT}%</div>
-          <div style={{fontFamily:MN,fontSize:9,color:C.violet,letterSpacing:"0.1em",margin:"8px 0 6px",textTransform:"uppercase"}}>Strategy</div>
+        <div style={{width:240,minWidth:240,borderRight:`1px solid ${P.border}`,padding:"14px 12px",overflowY:"auto",background:P.card+"88"}}>
+          <div style={{fontFamily:Fm,fontSize:10,color:P.violet,letterSpacing:"0.12em",marginBottom:8,textTransform:"uppercase",fontWeight:600}}>Allocation</div>
+          {[[a1,sA1,"Pos 1"],[a2,sA2,"Pos 2"],[a3,sA3,"Pos 3"],[a4,sA4,"Pos 4"],[a5,sA5,"Pos 5"]].map(([v,s,l])=><Sld key={l} l={l} v={v} set={s} min={1} max={50} suf="%"/>)}
+          <div style={{fontFamily:Fm,fontSize:11,color:aT===100?P.jade:P.ember,marginBottom:4,fontWeight:600}}>Total: {aT}%{aT!==100&&" ⚠"}</div>
+
+          <div style={{height:1,background:P.border,margin:"10px 0"}}/>
+          <div style={{fontFamily:Fm,fontSize:10,color:P.violet,letterSpacing:"0.12em",marginBottom:8,textTransform:"uppercase",fontWeight:600}}>Strategy</div>
           <Tog l="Manual Mode" v={man} set={setMan}/>
           {man?(<>
             <Sld l="APTR (Drop $)" v={mA} set={setMA} min={0.0005} max={8000} step={mA>100?10:mA>10?1:mA>1?0.1:0.001}/>
             <Sld l="Profit Target $" v={mP} set={setMP} min={0.0005} max={4000} step={mP>50?5:mP>5?0.5:mP>0.5?0.05:0.0005}/>
           </>):(<>
             <Sld l="ATR Length" v={aL} set={setAL} min={5} max={50}/>
-            <Sld l="Profit Div" v={pD} set={setPD} min={1} max={5} step={0.5}/>
+            <Sld l="Profit Divisor" v={pD} set={setPD} min={1} max={5} step={0.5}/>
           </>)}
-          <div style={{fontFamily:MN,fontSize:9,color:C.violet,letterSpacing:"0.1em",margin:"8px 0 6px",textTransform:"uppercase"}}>Filters</div>
+
+          <div style={{height:1,background:P.border,margin:"10px 0"}}/>
+          <div style={{fontFamily:Fm,fontSize:10,color:P.violet,letterSpacing:"0.12em",marginBottom:8,textTransform:"uppercase",fontWeight:600}}>Filters</div>
           <Tog l="10 EMA Entry" v={eOn} set={setEOn}/>
           <Tog l="RSI Exit" v={rOn} set={setROn}/>
-          {rOn&&<Sld l="RSI" v={rV} set={setRV} min={50} max={90}/>}
-          {bars&&<div style={{marginTop:10,padding:8,background:C.bg,borderRadius:6,fontFamily:MN,fontSize:9}}>
-            <div style={{color:C.muted,marginBottom:3}}>📊 {sym.replace("USDT","/USDT")} • {tf}</div>
-            <div style={{color:C.muted}}>{bars.length} candles</div>
-            <div style={{color:C.muted}}>{bars[0]?.label} → {bars[bars.length-1]?.label}</div>
+          {rOn&&<Sld l="RSI Level" v={rV} set={setRV} min={50} max={90}/>}
+
+          {bars&&<div style={{marginTop:12,padding:10,background:"rgba(123,92,245,0.05)",borderRadius:10,border:`1px solid ${P.border}`,fontFamily:Fm,fontSize:10}}>
+            <div style={{color:P.violet,marginBottom:4,fontWeight:600}}>📊 {sym.replace("USDT","/USDT")} • {tf}</div>
+            <div style={{color:P.ash}}>{bars.length} candles loaded</div>
           </div>}
         </div>
 
         {/* MAIN */}
-        <div style={{flex:1,padding:12,overflowY:"auto"}}>
-          {st==="loading"&&<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:300,gap:10}}><div style={{width:20,height:20,border:`2px solid ${C.violet}`,borderTopColor:"transparent",borderRadius:"50%",animation:"spin .8s linear infinite"}}/><span style={{fontFamily:MN,fontSize:12,color:C.muted}}>Binance'den veri çekiliyor...</span></div>}
+        <div style={{flex:1,padding:14,overflowY:"auto"}}>
+          {st==="loading"&&<div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:300,gap:12}}>
+            <div style={{width:28,height:28,border:`3px solid ${P.violet}`,borderTopColor:"transparent",borderRadius:"50%",animation:"spin .7s linear infinite"}}/>
+            <span style={{fontFamily:Fs,fontSize:13,color:P.ash}}>Binance'den veri çekiliyor...</span>
+          </div>}
 
           {s&&st==="done"&&(<>
             {/* STATS */}
-            <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:10}}>
+            <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:12}}>
               <Stat l="Final Equity" v={s.fE} pre="$" color={rc}/>
               <Stat l="Return" v={s.ret} suf="%" color={rc} pre={s.ret>=0?"+":""}/>
-              <Stat l="Win Rate" v={s.wr} suf="%" color={s.wr>=50?C.green:C.red}/>
-              <Stat l="Max DD" v={s.mDD} suf="%" color={C.red} pre="-"/>
-              <Stat l="Profit Factor" v={s.pf} color={s.pf>=1.5?C.green:s.pf>=1?C.amber:C.red}/>
-              <Stat l="Trades" v={s.cnt}/>
-              <Stat l="Avg Layers" v={s.aLy} color={C.cyan}/>
-              {s.oL>0&&<Stat l="⚠ Open" v={s.oL} suf=" layers" color={C.amber}/>}
+              <Stat l="Win Rate" v={s.wr} suf="%" color={s.wr>=50?P.jade:P.danger}/>
+              <Stat l="Max DD" v={s.mDD} suf="%" color={P.danger} pre="-"/>
+              <Stat l="Profit Factor" v={s.pf} color={s.pf>=1.5?P.jade:s.pf>=1?P.ember:P.danger}/>
+              <Stat l="Trades" v={s.cnt} color={P.cobalt}/>
+              <Stat l="Avg Layers" v={s.aLy} color={P.violet}/>
+              {s.oL>0&&<Stat l="⚠ Open" v={s.oL} suf=" layers" color={P.ember}/>}
             </div>
 
             {/* TABS */}
-            <div style={{display:"flex",gap:3,marginBottom:8,flexWrap:"wrap"}}>
-              {[["equity","📈 Equity"],["drawdown","📉 Drawdown"],["price","💰 Price"],["trades","📋 Trades"]].map(([k,lb])=>(
-                <button key={k} onClick={()=>setTab(k)} style={{fontFamily:MN,fontSize:10,padding:"5px 12px",borderRadius:5,background:tab===k?C.violet+"22":"transparent",border:`1px solid ${tab===k?C.violet:C.border}`,color:tab===k?C.violet:C.muted,cursor:"pointer"}}>{lb}</button>
+            <div style={{display:"flex",gap:4,marginBottom:10}}>
+              {[["candles","🕯 Candlestick"],["equity","📈 Equity"],["drawdown","📉 Drawdown"],["trades","📋 Trades"]].map(([k,lb])=>(
+                <button key={k} className={`tab-btn${tab===k?" active":""}`} onClick={()=>setTab(k)}>{lb}</button>
               ))}
             </div>
 
-            {/* CHART / TABLE */}
-            <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:12,marginBottom:10}}>
-              {tab==="equity"&&<Chart data={res.eq} dataKey="eq" color={C.violet} fillColor={C.violet} refLine={10000}/>}
-              {tab==="drawdown"&&<Chart data={res.eq} dataKey="dd" color={C.red} fillColor={C.red} reversed={true}/>}
-              {tab==="price"&&<Chart data={res.eq} dataKey="price" color={C.blue} fillColor={C.blue}/>}
-              {tab==="trades"&&<div style={{maxHeight:280,overflowY:"auto"}}>
-                <table style={{width:"100%",borderCollapse:"collapse",fontFamily:MN,fontSize:10}}>
-                  <thead><tr style={{borderBottom:`1px solid ${C.border}`}}>
-                    {["#","Time","Avg Entry","Exit","Layers","ATR","PnL $","PnL %","Type"].map(h=><th key={h} style={{textAlign:"left",padding:"5px 6px",color:C.muted,fontSize:9,fontWeight:600,position:"sticky",top:0,background:C.card}}>{h}</th>)}
-                  </tr></thead>
-                  <tbody>
-                    {res.trades.map((t,i)=>(
-                      <tr key={i} style={{borderBottom:`1px solid ${C.border}11`}}>
-                        <td style={{padding:"4px 6px",color:C.muted}}>{i+1}</td>
-                        <td style={{padding:"4px 6px"}}>{t.label}</td>
-                        <td style={{padding:"4px 6px"}}>${t.ae.toLocaleString("en")}</td>
-                        <td style={{padding:"4px 6px"}}>${t.ex.toLocaleString("en")}</td>
-                        <td style={{padding:"4px 6px",color:C.cyan}}>{t.ly}</td>
-                        <td style={{padding:"4px 6px",color:C.muted}}>{t.at}</td>
-                        <td style={{padding:"4px 6px",color:t.pnl>=0?C.green:C.red,fontWeight:600}}>{t.pnl>=0?"+":""}{t.pnl.toFixed(2)}</td>
-                        <td style={{padding:"4px 6px",color:t.pp>=0?C.green:C.red}}>{t.pp>=0?"+":""}{t.pp}%</td>
-                        <td style={{padding:"4px 6px",color:t.rs==="TP"?C.green:C.amber}}>{t.rs}</td>
+            {/* CHART */}
+            <div style={{background:P.card,border:`1px solid ${P.border}`,borderRadius:14,overflow:"hidden",marginBottom:12}}>
+              {tab!=="trades"?
+                <TVChart bars={bars} entries={res.entries} exits={res.exits} eqData={res.eqData} tab={tab}/>
+              :(
+                <div style={{maxHeight:380,overflowY:"auto",padding:14}}>
+                  <table style={{width:"100%",borderCollapse:"collapse",fontFamily:Fm,fontSize:11}}>
+                    <thead><tr>{["#","Time","Avg Entry","Exit","Layers","ATR","PnL $","PnL %","Type"].map(h=><th key={h} style={{textAlign:"left",padding:"8px",color:P.ash,fontSize:10,fontWeight:600,borderBottom:`1px solid ${P.border}`,position:"sticky",top:0,background:P.card}}>{h}</th>)}</tr></thead>
+                    <tbody>{res.trades.map((t,i)=>(
+                      <tr key={i} style={{borderBottom:`1px solid ${P.border}`}}>
+                        <td style={{padding:"6px 8px",color:P.ash}}>{i+1}</td>
+                        <td style={{padding:"6px 8px"}}>{new Date(t.time*1000).toLocaleDateString("tr-TR",{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"})}</td>
+                        <td style={{padding:"6px 8px"}}>${t.ae.toLocaleString("en")}</td>
+                        <td style={{padding:"6px 8px"}}>${t.ex.toLocaleString("en")}</td>
+                        <td style={{padding:"6px 8px",color:P.violet,fontWeight:600}}>{t.ly}</td>
+                        <td style={{padding:"6px 8px",color:P.ash}}>{t.at}</td>
+                        <td style={{padding:"6px 8px",color:t.pnl>=0?P.jade:P.danger,fontWeight:600}}>{t.pnl>=0?"+":""}{t.pnl.toFixed(2)}</td>
+                        <td style={{padding:"6px 8px",color:t.pp>=0?P.jade:P.danger}}>{t.pp>=0?"+":""}{t.pp}%</td>
+                        <td style={{padding:"6px 8px"}}><span style={{background:t.rs==="TP"?P.jade+"18":P.ember+"18",color:t.rs==="TP"?P.jade:P.ember,padding:"2px 8px",borderRadius:4,fontSize:10,fontWeight:600}}>{t.rs}</span></td>
                       </tr>
-                    ))}
-                    {!res.trades.length&&<tr><td colSpan={9} style={{padding:20,textAlign:"center",color:C.muted}}>Trade yok — APTR/Profit değerlerini ayarlayın</td></tr>}
-                  </tbody>
-                </table>
-              </div>}
+                    ))}{!res.trades.length&&<tr><td colSpan={9} style={{padding:24,textAlign:"center",color:P.ash}}>Trade yok</td></tr>}</tbody>
+                  </table>
+                </div>
+              )}
             </div>
 
             {/* RISK */}
-            <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:12}}>
-              <div style={{fontFamily:MN,fontSize:9,color:C.violet,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:8}}>Risk Analysis</div>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))",gap:6,fontFamily:MN,fontSize:11}}>
-                <div><span style={{color:C.muted}}>Best: </span><span style={{color:C.green,fontWeight:600}}>+${s.best}</span></div>
-                <div><span style={{color:C.muted}}>Worst: </span><span style={{color:s.worst<0?C.red:C.text,fontWeight:600}}>${s.worst}</span></div>
-                <div><span style={{color:C.muted}}>Avg Win: </span><span style={{color:C.green}}>+${s.aW}</span></div>
-                <div><span style={{color:C.muted}}>Avg Loss: </span><span style={{color:C.red}}>${s.aL}</span></div>
-                <div><span style={{color:C.muted}}>R:R: </span><span style={{fontWeight:600}}>{s.aL!==0?Math.abs(s.aW/s.aL).toFixed(2):"∞"}</span></div>
-                <div><span style={{color:C.muted}}>Mode: </span><span>{man?`Manual ($${mA}/$${mP})`:`ATR(${aL})/${pD}`}</span></div>
-                <div><span style={{color:C.muted}}>Verdict: </span><span style={{fontWeight:700,color:s.ret>0&&s.mDD<25&&s.pf>1.2?C.green:s.ret>0?C.amber:C.red}}>{s.ret>0&&s.mDD<25&&s.pf>1.2?"✅ Viable":s.ret>0?"⚠️ Risky":"❌ Unprofitable"}</span></div>
+            <div style={{background:P.card,border:`1px solid ${P.border}`,borderRadius:14,padding:16}}>
+              <div style={{fontFamily:Fm,fontSize:10,color:P.violet,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:12,fontWeight:600}}>Risk Analysis</div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:8,fontFamily:Fm,fontSize:12}}>
+                <div><span style={{color:P.ash}}>Best </span><span style={{color:P.jade,fontWeight:600}}>+${s.best}</span></div>
+                <div><span style={{color:P.ash}}>Worst </span><span style={{color:s.worst<0?P.danger:P.mist,fontWeight:600}}>${s.worst}</span></div>
+                <div><span style={{color:P.ash}}>Avg Win </span><span style={{color:P.jade}}>+${s.aW}</span></div>
+                <div><span style={{color:P.ash}}>Avg Loss </span><span style={{color:P.danger}}>${s.aL}</span></div>
+                <div><span style={{color:P.ash}}>R:R </span><span style={{fontWeight:700,color:P.white}}>{s.aL!==0?Math.abs(s.aW/s.aL).toFixed(2):"∞"}</span></div>
+                <div><span style={{color:P.ash}}>Mode </span><span style={{color:P.white}}>{man?`Manual ($${mA}/$${mP})`:`ATR(${aL})/${pD}`}</span></div>
+                <div style={{gridColumn:"span 2"}}><span style={{color:P.ash}}>Verdict </span><span style={{fontWeight:700,fontSize:13,color:s.ret>0&&s.mDD<25&&s.pf>1.2?P.jade:s.ret>0?P.ember:P.danger}}>{s.ret>0&&s.mDD<25&&s.pf>1.2?"✅ Viable Strategy":s.ret>0?"⚠️ Risky":s.cnt===0?"— No Trades":"❌ Unprofitable"}</span></div>
               </div>
             </div>
+            <div style={{textAlign:"center",padding:"14px 0 6px",fontFamily:Fs,fontSize:11,color:P.ash}}>Built with <span style={{color:P.violet}}>♥</span> by <span style={{color:P.violet,fontWeight:600}}>BottomUP</span></div>
           </>)}
-          {st==="idle"&&<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:300,color:C.muted,fontFamily:MN}}>▶ RUN ile başlayın</div>}
+          {st==="idle"&&<div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:300,gap:8}}>
+            <div style={{fontSize:36}}>📊</div>
+            <span style={{fontFamily:Fd,fontSize:22,color:P.white}}>Press <span style={{color:P.violet}}>RUN</span> to start</span>
+            <span style={{fontFamily:Fs,fontSize:12,color:P.ash}}>Select a pair and timeframe</span>
+          </div>}
         </div>
       </div>
     </div>
