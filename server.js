@@ -30,29 +30,61 @@ app.get('/api/okx/candles/:instId', async (req, res) => {
   try {
     const { instId } = req.params;
     const barRaw = req.query.bar || '1H';
-    // OKX bar format: 1m,5m,15m,30m = lowercase m; 1H,4H,1D,1W,1M = UPPERCASE
     const BAR_MAP = {'1h':'1H','2h':'2H','4h':'4H','6h':'6H','12h':'12H','1d':'1D','1w':'1W','1mo':'1M'};
     const bar = BAR_MAP[barRaw] || barRaw;
-    const limit = req.query.limit || '300';
-    const url = `https://www.okx.com/api/v5/market/candles?instId=${encodeURIComponent(instId)}&bar=${bar}&limit=${limit}`;
-    const data = await yahooFetch(url);
 
-    if (data.code !== '0' || !data.data?.length) {
-      return res.status(404).json({ error: 'OKX: ' + (data.msg || 'No data') });
+    // Determine how many pages to fetch based on timeframe
+    // OKX max 300 per request; we want ~500+ candles for good backtest
+    const pagesMap = {'1m':1,'5m':2,'15m':3,'30m':3,'1H':5,'2H':5,'4H':6,'6H':6,'12H':5,'1D':7,'1W':4,'1M':3};
+    const pages = pagesMap[bar] || 2;
+
+    let allCandles = [];
+    let after = '';
+
+    for (let p = 0; p < pages; p++) {
+      const params = `instId=${encodeURIComponent(instId)}&bar=${bar}&limit=300${after ? '&after=' + after : ''}`;
+      // First page: /candles (recent), subsequent pages: /history-candles (older)
+      const endpoint = p === 0 ? 'candles' : 'history-candles';
+      const url = `https://www.okx.com/api/v5/market/${endpoint}?${params}`;
+      const data = await yahooFetch(url);
+
+      if (data.code !== '0' || !data.data?.length) break;
+
+      // OKX returns newest first
+      allCandles = allCandles.concat(data.data);
+
+      // 'after' = oldest timestamp in this batch → fetches older data next
+      const oldest = data.data[data.data.length - 1][0];
+      after = oldest;
+
+      // If less than 300 returned, no more data
+      if (data.data.length < 300) break;
     }
 
-    // OKX returns newest first, reverse for chronological order
-    // Format: [ts, o, h, l, c, vol, volCcy, volCcyQuote, confirm]
-    const candles = data.data.reverse().map(k => ({
-      time: Math.floor(+k[0] / 1000),
-      open: +k[1],
-      high: +k[2],
-      low: +k[3],
-      close: +k[4],
-      volume: +k[5],
-    })).filter(c => c.open && c.close);
+    if (!allCandles.length) {
+      return res.status(404).json({ error: 'OKX: No data for ' + instId + ' ' + bar });
+    }
 
-    res.json({ instId, candles });
+    // Deduplicate by timestamp, sort chronologically (oldest first)
+    const seen = new Set();
+    const candles = allCandles
+      .filter(k => {
+        if (seen.has(k[0])) return false;
+        seen.add(k[0]);
+        return true;
+      })
+      .sort((a, b) => +a[0] - +b[0])
+      .map(k => ({
+        time: Math.floor(+k[0] / 1000),
+        open: +k[1],
+        high: +k[2],
+        low: +k[3],
+        close: +k[4],
+        volume: +k[5],
+      }))
+      .filter(c => c.open && c.close);
+
+    res.json({ instId, bar, pages: allCandles.length, candles });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
