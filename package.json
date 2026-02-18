@@ -1,0 +1,15 @@
+{
+  "name": "martingale-backtest",
+  "version": "1.0.0",
+  "description": "Martingale V2 Strategy Backtester — Binance Real Data",
+  "scripts": {
+    "start": "node server.js",
+    "build": "echo 'Static build — no build step needed'"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}
