@@ -171,6 +171,38 @@ app.get('/api/search/yahoo', async (req, res) => {
   } catch (e) { res.json([]); }
 });
 
+// OKX SWAP instruments (perpetual futures) — lever, ctVal, ctMult, minSz
+let okxSwapCache = null;
+let okxSwapCacheTime = 0;
+app.get('/api/okx/swap-info', async (req, res) => {
+  try {
+    if (!okxSwapCache || Date.now() - okxSwapCacheTime > 3600000) {
+      const data = await yahooFetch('https://www.okx.com/api/v5/public/instruments?instType=SWAP');
+      okxSwapCache = {};
+      (data.data || []).filter(i => i.instId.endsWith('-USDT-SWAP') && i.state === 'live').forEach(i => {
+        const base = i.instId.replace('-USDT-SWAP', '');
+        okxSwapCache[base] = {
+          instId: i.instId,
+          maxLever: +i.lever || 75,
+          ctVal: +i.ctVal || 1,
+          ctMult: +i.ctMult || 1,
+          minSz: +i.minSz || 1,
+          lotSz: +i.lotSz || 1,
+          tickSz: +i.tickSz || '0.01',
+          ctValCcy: i.ctValCcy || 'USD',
+        };
+      });
+      okxSwapCacheTime = Date.now();
+    }
+    const sym = req.query.sym; // e.g. "BTC" or "all"
+    if (sym && sym !== 'all' && okxSwapCache[sym]) {
+      res.json(okxSwapCache[sym]);
+    } else {
+      res.json(okxSwapCache);
+    }
+  } catch (e) { res.json({}); }
+});
+
 // ── Strategy APIs ──
 app.get('/api/strategy', (req, res) => {
   try { res.json(JSON.parse(fs.readFileSync(STRATEGY_FILE, 'utf8'))); }
