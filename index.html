@@ -215,11 +215,13 @@ function SignalCard({sig,sym,tf}){
 // ═══ PAPER TRADING ENGINE v4 — OKX Perpetual Futures Rules ═══
 // Flow: coin seç → OKX'ten max lever çek → otomatik seç → %1 risk → kontrat = risk × lever → hacim = kontrat × 2
 // Hedge mode: aynı coin'de hem LONG hem SHORT açılabilir
+// Backtest (Martingale) ve Paper Trade BAĞIMSIZ — sadece APTR mesafesini paylaşırlar
 function createPaperEngine(initialCap=10000){
   return{
     cap:initialCap,cash:initialCap,peakEq:initialCap,
     bots:{},positions:[],trades:[],nextId:1,startTime:Date.now(),
     riskPct:1,// bakiyenin %1'i riske edilir
+    maxPositions:10,// toplam max açık pozisyon
     swapInfo:{},// OKX'ten gelen kontrat bilgileri
 
     getStats(){
@@ -253,83 +255,93 @@ function createPaperEngine(initialCap=10000){
       const base=sym.replace("-USDT","");
       const si=this.swapInfo[base]||{maxLever:20,ctVal:1};
       const maxLev=si.maxLever;
-      const fA=b.cfg.mA||80;
       const riskPct=this.riskPct;
 
-      // ── Check SL / TP / Liq on all positions for this sym ──
+      // ── 1) Check SL / TP / Liq on existing positions (copy array to avoid mutation issues) ──
+      const toClose=[];
       this.positions.filter(p=>p.sym===sym).forEach(p=>{
+        // Skip positions opened less than 3 seconds ago (cooldown to avoid instant SL)
+        if(Date.now()-p.time<3000)return;
         let hit=null;
-        if(p.side==="LONG"&&price<=p.sl)hit={type:"SL",px:p.sl};
-        else if(p.side==="LONG"&&price>=p.tp)hit={type:"TP",px:p.tp};
-        else if(p.side==="LONG"&&price<=p.liq)hit={type:"LIQ",px:price};
-        else if(p.side==="SHORT"&&price>=p.sl)hit={type:"SL",px:p.sl};
-        else if(p.side==="SHORT"&&price<=p.tp)hit={type:"TP",px:p.tp};
-        else if(p.side==="SHORT"&&price>=p.liq)hit={type:"LIQ",px:price};
-        if(hit){
-          let pnl;
-          if(hit.type==="LIQ")pnl=-p.margin;
-          else pnl=p.side==="LONG"?(hit.px-p.ep)*p.qty:(p.ep-hit.px)*p.qty;
-          if(hit.type!=="LIQ")this.cash+=p.margin+pnl;
-          this.trades.push({sym,side:p.side,entry:+p.ep.toFixed(2),exit:+hit.px.toFixed(2),qty:+p.qty.toFixed(6),margin:p.margin,notional:p.notional,lever:p.lever,sl:+p.sl.toFixed(2),tp:+p.tp.toFixed(2),liq:+p.liq.toFixed(2),volume:p.volume,pnl:+pnl.toFixed(2),pnlPct:+((pnl/p.margin)*100).toFixed(2),result:hit.type,time:Date.now()});
-          events.push({type:hit.type,side:p.side,sym,price:+hit.px.toFixed(2),pnl:+pnl.toFixed(2),lever:p.lever});
-          this.positions=this.positions.filter(x=>x.id!==p.id);
+        if(p.side==="LONG"){
+          if(price<=p.liq)hit={type:"LIQ",px:price};
+          else if(price<=p.sl)hit={type:"SL",px:p.sl};
+          else if(price>=p.tp)hit={type:"TP",px:p.tp};
+        }else{
+          if(price>=p.liq)hit={type:"LIQ",px:price};
+          else if(price>=p.sl)hit={type:"SL",px:p.sl};
+          else if(price<=p.tp)hit={type:"TP",px:p.tp};
         }
+        if(hit)toClose.push({pos:p,hit});
       });
 
-      // ── Position sizing (OKX futures rules) ──
-      // Risk per trade = equity × %1
-      const equity=this.cash+this.positions.reduce((s,p)=>s+p.margin,0);
-      const riskAmt=equity*(riskPct/100);
-      // Margin (kontrat) = riskAmt (since SL is set so loss = riskAmt)
-      const margin=riskAmt;
-      // Notional (pozisyon değeri) = margin × maxLever
-      const notional=margin*maxLev;
-      // Qty (coin adedi) = notional / price
-      const qty=notional/price;
-      // Volume (hacim) = notional × 2 (kontrat × 2)
-      const volume=notional*2;
-      // SL distance so that loss = margin at SL → slDist = margin / qty
-      const slDist=margin/qty;
-      // TP = SL × 2 (1:2 R:R default)
-      const tpDist=slDist*2;
-      // Liq price (isolated margin) ≈ entry ± entry/lever × 0.9
-      const liqDist=price/maxLev*0.9;
+      // Process closures
+      toClose.forEach(({pos:p,hit})=>{
+        let pnl;
+        if(hit.type==="LIQ"){pnl=-p.margin;}
+        else{pnl=p.side==="LONG"?(hit.px-p.ep)*p.qty:(p.ep-hit.px)*p.qty;}
+        if(hit.type!=="LIQ")this.cash+=p.margin+pnl;
+        // else margin is lost (already deducted)
+        this.trades.push({sym,side:p.side,entry:+p.ep.toFixed(2),exit:+hit.px.toFixed(2),qty:+p.qty.toFixed(6),margin:p.margin,notional:p.notional,lever:p.lever,sl:+p.sl.toFixed(2),tp:+p.tp.toFixed(2),liq:+p.liq.toFixed(2),volume:p.volume,pnl:+pnl.toFixed(2),pnlPct:+((pnl/p.margin)*100).toFixed(2),result:hit.type,time:Date.now()});
+        events.push({type:hit.type,side:p.side,sym,price:+hit.px.toFixed(2),pnl:+pnl.toFixed(2),lever:p.lever});
+      });
+      if(toClose.length){
+        const closedIds=new Set(toClose.map(c=>c.pos.id));
+        this.positions=this.positions.filter(p=>!closedIds.has(p.id));
+      }
 
-      // ── LONG entry — Martingale layers, HEDGE MODE (independent from shorts) ──
+      // ── 2) Position sizing (OKX futures rules) ──
+      const equity=this.cash+this.positions.reduce((s,p)=>s+p.margin,0);
+      const riskAmt=equity*(riskPct/100);// %1 risk = $100 on $10K
+      const margin=+riskAmt.toFixed(2);
+      const notional=+(margin*maxLev).toFixed(0);// kontrat değeri
+      const qty=notional/price;// coin adedi
+      const volume=notional*2;// hacim = kontrat × 2
+      // SL distance: loss at SL = riskAmt → slDist = riskAmt / qty = price / maxLev
+      const slDist=riskAmt/qty;
+      const tpDist=slDist*2;// R:R 1:2
+      const liqDist=(price/maxLev)*0.9;// isolated margin liq
+
+      // Max position check
+      if(this.positions.length>=this.maxPositions)return events.length?events:null;
+      if(this.cash<margin)return events.length?events:null;
+
+      // ── 3) LONG entry — Martingale katman aralığı backtestten gelir (APTR) ──
+      const fA=b.cfg.mA||80;// APTR mesafesi — backtestle paylaşılan tek parametre
       const curLongs=this.positions.filter(p=>p.sym===sym&&p.side==="LONG");
       if(!curLongs.length){
         if(this.cash>=margin){
           const ep=price;
-          const pos={id:this.nextId++,sym,side:"LONG",qty,ep,margin:+margin.toFixed(2),notional:+notional.toFixed(0),lever:maxLev,sl:+(ep-slDist).toFixed(4),tp:+(ep+tpDist).toFixed(4),liq:+(ep-liqDist).toFixed(4),volume:+volume.toFixed(0),time:Date.now()};
-          this.positions.push(pos);this.cash-=+margin.toFixed(2);
-          events.push({type:"OPEN",side:"LONG",sym,layer:1,price:ep,margin:+margin.toFixed(2),notional:+notional.toFixed(0),qty:+qty.toFixed(6),sl:pos.sl,tp:pos.tp,liq:pos.liq,lever:maxLev,volume:+volume.toFixed(0)});
+          const pos={id:this.nextId++,sym,side:"LONG",qty,ep,margin,notional,lever:maxLev,sl:+(ep-slDist).toFixed(4),tp:+(ep+tpDist).toFixed(4),liq:+(ep-liqDist).toFixed(4),volume:+volume.toFixed(0),time:Date.now()};
+          this.positions.push(pos);this.cash-=margin;
+          events.push({type:"OPEN",side:"LONG",sym,layer:1,price:ep,margin,notional,qty:+qty.toFixed(6),sl:pos.sl,tp:pos.tp,liq:pos.liq,lever:maxLev,volume:+volume.toFixed(0)});
         }
       }else if(curLongs.length<5){
         const lastEp=curLongs[curLongs.length-1].ep;
-        if(price<lastEp-fA&&this.cash>=margin){
+        if(price<lastEp-fA&&this.cash>=margin&&this.positions.length<this.maxPositions){
           const ly=curLongs.length+1;const ep=price;
-          const pos={id:this.nextId++,sym,side:"LONG",qty,ep,margin:+margin.toFixed(2),notional:+notional.toFixed(0),lever:maxLev,sl:+(ep-slDist).toFixed(4),tp:+(ep+tpDist).toFixed(4),liq:+(ep-liqDist).toFixed(4),volume:+volume.toFixed(0),time:Date.now()};
-          this.positions.push(pos);this.cash-=+margin.toFixed(2);
-          events.push({type:"OPEN",side:"LONG",sym,layer:ly,price:ep,margin:+margin.toFixed(2),notional:+notional.toFixed(0),qty:+qty.toFixed(6),sl:pos.sl,tp:pos.tp,liq:pos.liq,lever:maxLev,volume:+volume.toFixed(0)});
+          const pos={id:this.nextId++,sym,side:"LONG",qty,ep,margin,notional,lever:maxLev,sl:+(ep-slDist).toFixed(4),tp:+(ep+tpDist).toFixed(4),liq:+(ep-liqDist).toFixed(4),volume:+volume.toFixed(0),time:Date.now()};
+          this.positions.push(pos);this.cash-=margin;
+          events.push({type:"OPEN",side:"LONG",sym,layer:ly,price:ep,margin,notional,qty:+qty.toFixed(6),sl:pos.sl,tp:pos.tp,liq:pos.liq,lever:maxLev,volume:+volume.toFixed(0)});
         }
       }
 
-      // ── SHORT entry — HEDGE: independent layers, same coin ──
+      // ── 4) SHORT entry — HEDGE MODE (bağımsız, aynı anda long+short) ──
       const curShorts=this.positions.filter(p=>p.sym===sym&&p.side==="SHORT");
       if(!curShorts.length){
-        if(b.basePrice&&price>b.basePrice+fA&&this.cash>=margin){
+        if(b.basePrice&&price>b.basePrice+fA&&this.cash>=margin&&this.positions.length<this.maxPositions){
           const ep=price;
-          const pos={id:this.nextId++,sym,side:"SHORT",qty,ep,margin:+margin.toFixed(2),notional:+notional.toFixed(0),lever:maxLev,sl:+(ep+slDist).toFixed(4),tp:+(ep-tpDist).toFixed(4),liq:+(ep+liqDist).toFixed(4),volume:+volume.toFixed(0),time:Date.now()};
-          this.positions.push(pos);this.cash-=+margin.toFixed(2);
-          events.push({type:"OPEN",side:"SHORT",sym,layer:1,price:ep,margin:+margin.toFixed(2),notional:+notional.toFixed(0),qty:+qty.toFixed(6),sl:pos.sl,tp:pos.tp,liq:pos.liq,lever:maxLev,volume:+volume.toFixed(0)});
+          const pos={id:this.nextId++,sym,side:"SHORT",qty,ep,margin,notional,lever:maxLev,sl:+(ep+slDist).toFixed(4),tp:+(ep-tpDist).toFixed(4),liq:+(ep+liqDist).toFixed(4),volume:+volume.toFixed(0),time:Date.now()};
+          this.positions.push(pos);this.cash-=margin;
+          events.push({type:"OPEN",side:"SHORT",sym,layer:1,price:ep,margin,notional,qty:+qty.toFixed(6),sl:pos.sl,tp:pos.tp,liq:pos.liq,lever:maxLev,volume:+volume.toFixed(0)});
         }
       }else if(curShorts.length<3){
         const lastEp=curShorts[curShorts.length-1].ep;
-        if(price>lastEp+fA&&this.cash>=margin){
+        if(price>lastEp+fA&&this.cash>=margin&&this.positions.length<this.maxPositions){
           const ly=curShorts.length+1;const ep=price;
-          const pos={id:this.nextId++,sym,side:"SHORT",qty,ep,margin:+margin.toFixed(2),notional:+notional.toFixed(0),lever:maxLev,sl:+(ep+slDist).toFixed(4),tp:+(ep-tpDist).toFixed(4),liq:+(ep+liqDist).toFixed(4),volume:+volume.toFixed(0),time:Date.now()};
-          this.positions.push(pos);this.cash-=+margin.toFixed(2);
-          events.push({type:"OPEN",side:"SHORT",sym,layer:ly,price:ep,margin:+margin.toFixed(2),notional:+notional.toFixed(0),qty:+qty.toFixed(6),sl:pos.sl,tp:pos.tp,liq:pos.liq,lever:maxLev,volume:+volume.toFixed(0)});
+          const pos={id:this.nextId++,sym,side:"SHORT",qty,ep,margin,notional,lever:maxLev,sl:+(ep+slDist).toFixed(4),tp:+(ep-tpDist).toFixed(4),liq:+(ep+liqDist).toFixed(4),volume:+volume.toFixed(0),time:Date.now()};
+          this.positions.push(pos);this.cash-=margin;
+          events.push({type:"OPEN",side:"SHORT",sym,layer:ly,price:ep,margin,notional,qty:+qty.toFixed(6),sl:pos.sl,tp:pos.tp,liq:pos.liq,lever:maxLev,volume:+volume.toFixed(0)});
         }
       }
       return events.length?events:null;
@@ -338,7 +350,7 @@ function createPaperEngine(initialCap=10000){
 }
 
 // ═══ PAPER TRADING PANEL v4 — OKX Auto Leverage, %1 Risk, Hedge Mode ═══
-function PaperPanel({engine,setEngine,syms,cfg}){
+function PaperPanel({engine,setEngine,syms,cfg,tick,setTick}){
   const[selected,setSelected]=useState([]);
   const[running,setRunning]=useState(false);
   const[expanded,setExpanded]=useState(true);
@@ -403,7 +415,7 @@ function PaperPanel({engine,setEngine,syms,cfg}){
                 if(ev.type==="LIQ")return{t:Date.now(),msg:`💀 LIQ ${ev.side} ${cn} — $${Math.abs(ev.pnl)} margin kaybedildi`};
                 return{t:Date.now(),msg:JSON.stringify(ev)};
               }),...prev].slice(0,100));
-              setEngine({...engineRef.current});
+              setTick(prev=>prev+1);// trigger re-render without breaking engine methods
             }
           }catch(err){}
         };
@@ -421,7 +433,16 @@ function PaperPanel({engine,setEngine,syms,cfg}){
 
   useEffect(()=>()=>{Object.keys(wsRefs.current).forEach(k=>{try{wsRefs.current[k].close();}catch(e){}});},[]);
 
-  const stats=engine?.getStats?.();
+  // Periodic re-render for live unrealized PnL (every 2s while running)
+  useEffect(()=>{
+    if(!running)return;
+    const iv=setInterval(()=>setTick(p=>p+1),2000);
+    return()=>clearInterval(iv);
+  },[running,setTick]);
+
+  // Use engineRef for live data (tick counter forces re-render)
+  const eng=engineRef.current;
+  const stats=eng?.getStats?.();
   const eq=stats?.equity||10000;
   const ret=stats?((eq-10000)/10000*100):0;
 
@@ -458,7 +479,8 @@ function PaperPanel({engine,setEngine,syms,cfg}){
           <div style={{color:P.ash}}>• Kontrat = Risk × Kaldıraç → örn: $100 × 125x = <span style={{color:P.white,fontWeight:600}}>$12,500</span></div>
           <div style={{color:P.ash}}>• Hacim = Kontrat × 2 → <span style={{color:P.cobalt,fontWeight:600}}>$25,000</span></div>
           <div style={{color:P.ash}}>• <span style={{color:P.jade}}>Hedge Mode</span>: Aynı coin'de eş zamanlı Long + Short</div>
-          <div style={{color:P.ash}}>• R:R 1:2 • SL ve TP otomatik hesaplanır</div>
+          <div style={{color:P.ash}}>• R:R 1:2 • SL ve TP otomatik • Max <span style={{color:P.ember,fontWeight:600}}>10 pozisyon</span></div>
+          <div style={{color:P.ash,fontSize:9,marginTop:2}}>⚠️ Backtest (Martingale) ve Paper Trade bağımsız — sadece APTR katman mesafesini paylaşır</div>
         </div>
 
         {/* Coin Selection with leverage badges */}
@@ -506,12 +528,12 @@ function PaperPanel({engine,setEngine,syms,cfg}){
         </div>
 
         {/* Open Positions */}
-        {engine?.positions?.length>0&&<div style={{marginBottom:6}}>
-          <div style={{fontFamily:Fm,fontSize:9,color:P.ember,letterSpacing:"0.1em",marginBottom:3,fontWeight:600}}>AÇIK POZİSYONLAR ({engine.positions.length}) — HEDGE MODE</div>
+        {eng?.positions?.length>0&&<div style={{marginBottom:6}}>
+          <div style={{fontFamily:Fm,fontSize:9,color:P.ember,letterSpacing:"0.1em",marginBottom:3,fontWeight:600}}>AÇIK POZİSYONLAR ({eng.positions.length}) — HEDGE MODE</div>
           <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontFamily:Fm,fontSize:9}}>
             <thead><tr>{["#","Coin","Yön","Kaldıraç","Giriş","Şimdi","Margin","Kontrat","Hacim","SL","TP","Liq","K/Z","ROI%"].map(h=><th key={h} style={{textAlign:"left",padding:"3px 4px",color:P.ash,fontSize:8,borderBottom:`1px solid ${P.border}`,whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead>
-            <tbody>{engine.positions.map(p=>{
-              const lp=engine.bots[p.sym]?.lastPrice||p.ep;
+            <tbody>{eng.positions.map(p=>{
+              const lp=eng.bots[p.sym]?.lastPrice||p.ep;
               const uPnl=p.side==="LONG"?(lp-p.ep)*p.qty:(p.ep-lp)*p.qty;
               const roi=((uPnl/p.margin)*100);
               return <tr key={p.id} style={{borderBottom:`1px solid ${P.border}`}}>
@@ -535,11 +557,11 @@ function PaperPanel({engine,setEngine,syms,cfg}){
         </div>}
 
         {/* Closed Trades */}
-        {engine?.trades?.length>0&&<div style={{marginBottom:6}}>
-          <div style={{fontFamily:Fm,fontSize:9,color:P.violet,letterSpacing:"0.1em",marginBottom:3,fontWeight:600}}>KAPANMIŞ ({engine.trades.length})</div>
+        {eng?.trades?.length>0&&<div style={{marginBottom:6}}>
+          <div style={{fontFamily:Fm,fontSize:9,color:P.violet,letterSpacing:"0.1em",marginBottom:3,fontWeight:600}}>KAPANMIŞ ({eng.trades.length})</div>
           <div style={{overflowX:"auto",maxHeight:70,overflowY:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontFamily:Fm,fontSize:9}}>
             <thead><tr>{["Coin","Yön","Kaldıraç","Giriş","Çıkış","Hacim","Sonuç","K/Z","ROI%"].map(h=><th key={h} style={{textAlign:"left",padding:"2px 4px",color:P.ash,fontSize:8,borderBottom:`1px solid ${P.border}`,position:"sticky",top:0,background:P.card,whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead>
-            <tbody>{[...engine.trades].reverse().map((t,i)=><tr key={i} style={{borderBottom:`1px solid ${P.border}`}}>
+            <tbody>{[...eng.trades].reverse().map((t,i)=><tr key={i} style={{borderBottom:`1px solid ${P.border}`}}>
               <td style={{padding:"2px 4px",color:P.white,fontWeight:600}}>{t.sym.replace("-USDT","")}</td>
               <td style={{padding:"2px 4px"}}><span style={{background:t.side==="LONG"?P.jade+"20":P.danger+"20",color:t.side==="LONG"?P.jade:P.danger,padding:"1px 4px",borderRadius:3,fontWeight:700,fontSize:8}}>{t.side}</span></td>
               <td style={{padding:"2px 4px",color:P.ember}}>{t.lever}x</td>
@@ -579,6 +601,7 @@ function App(){
   const[lP,setLP]=useState(null);const[err,setErr]=useState(null);const ws=useRef(null);
   const[sig,setSig]=useState(null);const[sigOn,setSigOn]=useState(false);
   const[paperEng,setPaperEng]=useState(null);
+  const[paperTick,setPaperTick]=useState(0);// force re-render counter
 
   // Recalculate signal whenever live price changes
   useEffect(()=>{
@@ -656,7 +679,7 @@ function App(){
       </div>
     </div>
     {/* PAPER TRADING PANEL */}
-    <PaperPanel engine={paperEng} setEngine={setPaperEng} syms={syms} cfg={cfg}/>
+    <PaperPanel engine={paperEng} setEngine={setPaperEng} syms={syms} cfg={cfg} tick={paperTick} setTick={setPaperTick}/>
   </div>;
 }
 ReactDOM.render(React.createElement(App),document.getElementById('root'));
