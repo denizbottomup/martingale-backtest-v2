@@ -39,6 +39,75 @@ async function fetchData(mkt,sym,tfObj){return mkt==="crypto"?fetchOKX(sym,tfObj
 function _atr(b,x,len){if(x<1)return b[0].high-b[0].low;let s=0,n=0;for(let i=Math.max(1,x-len+1);i<=x;i++){s+=Math.max(b[i].high-b[i].low,Math.abs(b[i].high-b[i-1].close),Math.abs(b[i].low-b[i-1].close));n++;}return n?s/n:0;}
 function _ema(b,x,len){const k=2/(len+1);let e=b[0].close;for(let i=1;i<=x;i++)e=b[i].close*k+e*(1-k);return e;}
 function _rsi(b,x,len=14){if(x<len)return 50;let g=0,lo=0;for(let i=x-len+1;i<=x;i++){const d=b[i].close-b[i-1].close;if(d>0)g+=d;else lo-=d;}return lo===0?100:100-100/(1+g/lo);}
+// ═══ DARPHANE HELPERS ═══
+// EMA200 — trend filter
+function _ema200(b,x){return _ema(b,x,200);}
+// RSI consecutive counter — kaç bar üst üste eşik üstünde/altında
+function _rsiZoneCount(b,x,rsiLen,thresh,dir){
+  // dir="up" → RSI>upperThresh, dir="down" → RSI<lowerThresh
+  const upper=100-thresh,lower=thresh;
+  let cnt=0;
+  for(let i=x;i>=Math.max(1,x-20);i--){
+    const r=_rsi(b,i,rsiLen);
+    if(dir==="up"&&r>upper)cnt++;
+    else if(dir==="down"&&r<lower)cnt++;
+    else break;
+  }
+  return cnt;
+}
+// Volume anomaly — sigma-based spike detection
+function _volAnomaly(b,x,volLen=20,sigma=5){
+  if(x<volLen+1||!b[x].volume||!b[x-1].volume)return false;
+  const vc=b[x].volume/b[x-1].volume-1;
+  let diffs=[];
+  for(let i=Math.max(2,x-volLen);i<x;i++){
+    if(b[i-1].volume>0)diffs.push(b[i].volume/b[i-1].volume-1);
+  }
+  if(diffs.length<5)return false;
+  const mean=diffs.reduce((s,d)=>s+d,0)/diffs.length;
+  const std=Math.sqrt(diffs.reduce((s,d)=>s+(d-mean)**2,0)/diffs.length);
+  return std>0&&Math.abs(vc/std)>sigma;
+}
+// Darphane support/resistance zone from RSI extremes
+function _drpZone(b,x,rsiLen,thresh,count){
+  const upper=100-thresh,lower=thresh;
+  // Find last zone where RSI stayed count bars in extreme
+  let supH=null,supL=null,resH=null,resL=null;
+  let dCnt=0,uCnt=0;
+  for(let i=Math.min(x,b.length-1);i>=Math.max(1,x-100);i--){
+    const r=_rsi(b,i,rsiLen);
+    if(r<lower){dCnt++;if(dCnt>=count&&!supH){supH=b[i].high;supL=b[i].low;}}
+    else dCnt=0;
+    if(r>upper){uCnt++;if(uCnt>=count&&!resH){resH=b[i].high;resL=b[i].low;}}
+    else uCnt=0;
+    if(supH&&resH)break;
+  }
+  return{supH,supL,resH,resL};
+}
+// Darphane signal — full Pine Script logic translated
+function _drpSignal(b,x,cfg){
+  if(x<200)return{dir:null,reason:"Yetersiz veri (<200 bar)"};
+  const{drpRsiLen,drpThresh,drpCount,drpTrendFilter}=cfg;
+  const rsi=_rsi(b,x,drpRsiLen);
+  const ema200=_ema(b,x,200);
+  const p=b[x].close;
+  const isUptrend=p>ema200;
+  const isDowntrend=p<ema200;
+  const prevRsdCount=_rsiZoneCount(b,x-1,drpRsiLen,drpThresh,"down");
+  const prevRsuCount=_rsiZoneCount(b,x-1,drpRsiLen,drpThresh,"up");
+  const greenCandle=b[x].close>b[x].open;
+  const redCandle=b[x].close<b[x].open;
+  const volSpike=_volAnomaly(b,x);
+  // Long: destek bölgesi oluştu (rsd>=count) + yeşil mum + trend yukarı
+  const longOk=prevRsdCount>=drpCount&&greenCandle&&(drpTrendFilter?isUptrend:true);
+  // Short: direnç bölgesi oluştu (rsu>=count) + kırmızı mum + trend aşağı
+  const shortOk=prevRsuCount>=drpCount&&redCandle&&(drpTrendFilter?isDowntrend:true);
+  let dir=null,reason="";
+  if(longOk){dir="LONG";reason=`DRP AL: RSI<${drpThresh} ${prevRsdCount}bar + Yeşil mum${drpTrendFilter?" + Trend↑":""}${volSpike?" + 📊Vol!":""}`;}
+  else if(shortOk){dir="SHORT";reason=`DRP SAT: RSI>${100-drpThresh} ${prevRsuCount}bar + Kırmızı mum${drpTrendFilter?" + Trend↓":""}${volSpike?" + 📊Vol!":""}`;}
+  else{reason=`DRP bekle — RSI:${rsi.toFixed(0)} EMA200:${ema200.toFixed(0)}${volSpike?" 📊Vol!":""}`;}
+  return{dir,reason,rsi:+rsi.toFixed(1),ema200:+ema200.toFixed(0),volSpike,zone:_drpZone(b,x,drpRsiLen,drpThresh,drpCount)};
+}
 function backtest(bars,cfg){const{al,man,mA,mP,aL,pD,rOn,rV,eOn,eL,cap}=cfg;const I=cap||10000;let cash=I,pos=[],trades=[],eqData=[],entries=[],exits=[];let peak=I,mDD=0;for(let i=1;i<bars.length;i++){const p=bars[i].close,a=_atr(bars,i,aL),e10=_ema(bars,i,eL||10),r=_rsi(bars,i);const fA=man?mA:a,fT=man?mP:a/pD,eS=eOn?p<e10:true,rO=rOn?r<rV:true;const pV=pos.reduce((s,x)=>s+x.q*p,0),curE=cash+pV;if(!pos.length&&eS&&rO){const amt=curE*(al[0]/100);if(amt>1&&cash>=amt){pos.push({q:amt/p,ep:p});cash-=amt;entries.push({time:bars[i].time,price:p,layer:1});}}else if(pos.length>0&&pos.length<5){const lE=pos[pos.length-1].ep;if(p<lE-fA&&eS){const e2=cash+pos.reduce((s,x)=>s+x.q*p,0),amt=e2*(al[pos.length]/100);if(amt>1&&cash>=amt){pos.push({q:amt/p,ep:p});cash-=amt;entries.push({time:bars[i].time,price:p,layer:pos.length});}}}if(pos.length>0){const tQ=pos.reduce((s,x)=>s+x.q,0),tC=pos.reduce((s,x)=>s+x.q*x.ep,0),aP=tC/tQ,rE=rOn&&r>rV;if(p>=aP+fT||rE){const eV=tQ*p,pnl=eV-tC;trades.push({bar:i,time:bars[i].time,ae:+aP.toFixed(2),ex:+p.toFixed(2),ly:pos.length,pnl:+pnl.toFixed(2),pp:+((pnl/tC)*100).toFixed(2),rs:rE?"RSI":"TP",at:+fA.toFixed(2)});exits.push({time:bars[i].time,price:p,reason:rE?"RSI":"TP",pnl:+pnl.toFixed(2)});cash+=eV;pos=[];}}const cE=cash+pos.reduce((s,x)=>s+x.q*p,0);if(cE>peak)peak=cE;const dd=((peak-cE)/peak)*100;if(dd>mDD)mDD=dd;eqData.push({time:bars[i].time,value:+cE.toFixed(2)});}const fE=cash+pos.reduce((s,x)=>s+x.q*bars[bars.length-1].close,0);const w=trades.filter(t=>t.pnl>0),lo=trades.filter(t=>t.pnl<=0);const gW=w.reduce((s,t)=>s+t.pnl,0),gL=Math.abs(lo.reduce((s,t)=>s+t.pnl,0));return{trades,eqData,entries,exits,s:{fE:+fE.toFixed(2),ret:+(((fE-I)/I)*100).toFixed(2),cnt:trades.length,wr:trades.length?+((w.length/trades.length)*100).toFixed(1):0,mDD:+mDD.toFixed(2),pf:gL>0?+(gW/gL).toFixed(2):w.length?999:0,aW:w.length?+(gW/w.length).toFixed(2):0,aL:lo.length?+(-gL/lo.length).toFixed(2):0,aLy:trades.length?+(trades.reduce((s,t)=>s+t.ly,0)/trades.length).toFixed(1):0,oL:pos.length,best:trades.length?+Math.max(...trades.map(t=>t.pnl)).toFixed(2):0,worst:trades.length?+Math.min(...trades.map(t=>t.pnl)).toFixed(2):0}};}
 function parsePine(code){const r={};for(const line of code.split('\n')){const m=line.trim().match(/(\w+)\s*=\s*input[\w.]*\(([^)]+)\)/);if(m){const v=m[1].toLowerCase(),a=m[2],n=s=>{const x=s.match(/-?[\d.]+/);return x?parseFloat(x[0]):null;},dv=n(a);if(v.includes('pos1')||v.includes('alloc'))r.layer1=dv;if(v.includes('pos2'))r.layer2=dv;if(v.includes('pos3'))r.layer3=dv;if(v.includes('pos4'))r.layer4=dv;if(v.includes('pos5'))r.layer5=dv;if(v.includes('aptr')||v.includes('drop'))r.aptr=dv;if(v.includes('profit')||v.includes('target'))r.profitTarget=dv;if(v.includes('atr_len'))r.atrLength=dv;if(v.includes('rsi_level'))r.rsiLevel=dv;if(v.includes('use_ema'))r.useEma=line.includes('true');if(v.includes('use_rsi'))r.useRsi=line.includes('true');if(v.includes('manual'))r.useManual=line.includes('true');}}return r;}
 function mergeCfg(cur,parsed){const n=JSON.parse(JSON.stringify(cur));const d=n.defaults,a=n.allocations;['useManual','useEma','useRsi'].forEach(k=>{if(parsed[k]!==undefined)d[k]=parsed[k];});['rsiLevel','atrLength','emaLength','profitDivisor'].forEach(k=>{if(parsed[k])d[k]=parsed[k];});['layer1','layer2','layer3','layer4','layer5'].forEach(k=>{if(parsed[k])a[k]=parsed[k];});n._version=(parseFloat(n._version||"3.0")+0.1).toFixed(1);return n;}
@@ -223,6 +292,9 @@ function createPaperEngine(initialCap=10000){
     riskPct:1,maxPositions:10,swapInfo:{},
     // Strategy config — set at start from backtest params
     stratCfg:{eOn:true,eL:10,rOn:false,rV:71,aL:14,pD:2,man:true,mA:80,mP:40},
+    // Darphane config
+    drpCfg:{drpRsiLen:14,drpThresh:30,drpCount:3,drpTrendFilter:true},
+    stratMode:"combo",// "martingale" | "darphane" | "combo"
 
     getStats(){
       const w=this.trades.filter(t=>t.pnl>0),lo=this.trades.filter(t=>t.pnl<=0);
@@ -247,34 +319,50 @@ function createPaperEngine(initialCap=10000){
       };
     },
 
-    // Calculate signal from bars — same logic as calcSignal
+    // Calculate signal — supports Martingale, Darphane, or Combo mode
     _signal(sym){
       const b=this.bots[sym];
       if(!b||!b.bars||b.bars.length<20)return{dir:null,reason:"Yetersiz veri"};
       const bars=b.bars;
       const last=bars.length-1;
       const p=b.lastPrice||bars[last].close;
-      const{eOn,eL,rOn,rV}=this.stratCfg;
+      const mode=this.stratMode;
 
-      const ema=_ema(bars,last,eL||10);
-      const rsi=_rsi(bars,last);
+      // ── Martingale signal ──
+      let mDir=null,mReason="";
+      if(mode==="martingale"||mode==="combo"){
+        const{eOn,eL,rOn,rV}=this.stratCfg;
+        const ema=_ema(bars,last,eL||10);
+        const rsi=_rsi(bars,last);
+        const belowEma=eOn?p<ema:true;
+        const rsiOk=rOn?rsi<rV:true;
+        const aboveEma=eOn?p>ema:false;
+        const rsiOB=rsi>70;
+        if(belowEma&&rsiOk){mDir="LONG";mReason=`MTG: EMA↓(${p.toFixed(0)}<${ema.toFixed(0)}) RSI:${rsi.toFixed(0)}`;}
+        if(aboveEma&&rsiOB){mDir="SHORT";mReason=`MTG: EMA↑+RSI(${rsi.toFixed(0)}>70)`;}
+      }
 
-      // LONG sinyal: fiyat EMA altında + RSI aşırı alımda değil
-      const belowEma=eOn?p<ema:true;
-      const rsiOk=rOn?rsi<rV:true;
-      const rsiOversold=rsi<30;
-      const rsiOverbought=rsi>70;
+      // ── Darphane signal ──
+      let dDir=null,dReason="";
+      if(mode==="darphane"||mode==="combo"){
+        if(bars.length>=200){
+          const ds=_drpSignal(bars,last,this.drpCfg);
+          dDir=ds.dir;dReason=ds.reason;
+        }else{dReason="DRP: <200 bar";}
+      }
 
-      // SHORT sinyal: fiyat EMA üstünde + RSI aşırı alımda
-      const aboveEma=eOn?p>ema:false;
-
-      let dir=null;
-      let reason="";
-      if(belowEma&&rsiOk){dir="LONG";reason=`EMA altı (${p.toFixed(0)}<${ema.toFixed(0)}) RSI:${rsi.toFixed(0)}`;}
-      if(aboveEma&&rsiOverbought){dir="SHORT";reason=`EMA üstü + RSI aşırı (${rsi.toFixed(0)}>70)`;}
-      if(!dir)reason=`Sinyal yok — EMA:${ema.toFixed(0)} RSI:${rsi.toFixed(0)}`;
-
-      return{dir,reason,ema:+ema.toFixed(2),rsi:+rsi.toFixed(1)};
+      // ── Combine ──
+      let dir=null,reason="";
+      if(mode==="martingale"){dir=mDir;reason=mReason||"MTG: Sinyal yok";}
+      else if(mode==="darphane"){dir=dDir;reason=dReason||"DRP: Sinyal yok";}
+      else{// combo — her iki sinyal de aynı yönü gösteriyorsa GÜÇLÜ, biri yeterliyse NORMAL
+        if(mDir&&dDir&&mDir===dDir){dir=mDir;reason=`🔥 COMBO ${mDir}: ${mReason} + ${dReason}`;}
+        else if(mDir){dir=mDir;reason=mReason;}
+        else if(dDir){dir=dDir;reason=dReason;}
+        else{reason=`Bekle — ${mReason||"MTG:—"} | ${dReason||"DRP:—"}`;}
+      }
+      if(!dir&&!reason)reason="Sinyal yok";
+      return{dir,reason};
     },
 
     tick(sym,price){
@@ -411,6 +499,10 @@ function PaperPanel({engine,setEngine,syms,cfg,tick,setTick}){
   const[logs,setLogs]=useState([]);
   const[swapInfo,setSwapInfo]=useState(null);// OKX SWAP kontrat bilgileri
   const[loading,setLoading]=useState(false);
+  const[stratMode,setStratMode]=useState("combo");// "martingale"|"darphane"|"combo"
+  const[drpThresh,setDrpThresh]=useState(30);
+  const[drpCount,setDrpCount]=useState(3);
+  const[drpTrend,setDrpTrend]=useState(true);
   const wsRefs=useRef({});
   const engineRef=useRef(engine);
   engineRef.current=engine;
@@ -442,6 +534,8 @@ function PaperPanel({engine,setEngine,syms,cfg,tick,setTick}){
       aL:cfg?.defaults?.atrLength||14,pD:cfg?.defaults?.pDivider||2,
       man:true,mA,mP:mA/2,
     };
+    eng.drpCfg={drpRsiLen:14,drpThresh,drpCount,drpTrendFilter:drpTrend};
+    eng.stratMode=stratMode;
 
     // Fetch 1H bars for each coin (needed for EMA/RSI signal)
     const barPromises=selected.map(sym=>
@@ -454,11 +548,13 @@ function PaperPanel({engine,setEngine,syms,cfg,tick,setTick}){
 
     setEngine(eng);setRunning(true);setLoading(false);
     const levList=selected.map(s=>s.replace("-USDT","")+"("+getLev(s)+"x)").join(", ");
+    const modeLabel={martingale:"Martingale",darphane:"Darphane",combo:"Combo (MTG+DRP)"}[stratMode];
     setLogs([
-      {t:Date.now(),msg:`🚀 Signal-Based Futures — $10K — Risk %1 — Hedge Mode — ${selected.length} coin`},
+      {t:Date.now(),msg:`🚀 ${modeLabel} Futures — $10K — Risk %1 — Hedge Mode — ${selected.length} coin`},
       {t:Date.now()-1,msg:`⚡ Kaldıraçlar: ${levList}`},
-      {t:Date.now()-2,msg:`📊 EMA(${eng.stratCfg.eL}) ${eng.stratCfg.eOn?"ON":"OFF"} | RSI ${eng.stratCfg.rOn?"<"+eng.stratCfg.rV:"OFF"} | APTR:$${mA}`},
-      {t:Date.now()-3,msg:`📈 Bars yüklendi: ${allBars.map(b=>b.sym.replace("-USDT","")+"("+b.bars.length+")").join(", ")}`},
+      {t:Date.now()-2,msg:`📊 MTG: EMA(${eng.stratCfg.eL}) ${eng.stratCfg.eOn?"ON":"OFF"} | APTR:$${mA}`},
+      {t:Date.now()-3,msg:`🏛️ DRP: RSI(14) Eşik:${drpThresh}/${100-drpThresh} Teyit:${drpCount}bar Trend:${drpTrend?"ON":"OFF"}`},
+      {t:Date.now()-4,msg:`📈 Bars: ${allBars.map(b=>b.sym.replace("-USDT","")+"("+b.bars.length+")").join(", ")}`},
     ]);
 
     Object.keys(wsRefs.current).forEach(k=>{try{wsRefs.current[k].close();}catch(e){}});
@@ -545,16 +641,52 @@ function PaperPanel({engine,setEngine,syms,cfg,tick,setTick}){
       {!running?<>
         <div style={{fontFamily:Fm,fontSize:10,color:P.violet,letterSpacing:"0.12em",marginBottom:6,fontWeight:600}}>OKX PERPETUAL FUTURES — PAPER TRADE</div>
 
-        {/* Info Box */}
-        <div style={{background:P.surface,borderRadius:8,padding:"8px 12px",marginBottom:10,fontFamily:Fm,fontSize:10,lineHeight:1.6}}>
-          <div style={{color:P.mist}}>📋 <span style={{color:P.white,fontWeight:600}}>Kurallar:</span></div>
-          <div style={{color:P.ash}}>• <span style={{color:P.jade}}>LONG</span>: Fiyat {'<'} EMA + RSI uygun → Martingale katmanlar</div>
-          <div style={{color:P.ash}}>• <span style={{color:P.danger}}>SHORT</span>: Fiyat {'>'} EMA + RSI {'>'} 70 → Ters katmanlar</div>
-          <div style={{color:P.ash}}>• Sinyal yoksa pozisyon <span style={{color:P.ember,fontWeight:600}}>açılmaz</span> — bekler</div>
-          <div style={{color:P.ash}}>• Her işlemde bakiyenin <span style={{color:P.ember,fontWeight:600}}>%1</span>'i risk • R:R 1:2 • OKX max kaldıraç</div>
-          <div style={{color:P.ash}}>• Kontrat = Risk × Lever • Hacim = Kontrat × 2</div>
-          <div style={{color:P.ash}}>• <span style={{color:P.violet}}>Hedge</span>: Aynı coin'de Long + Short bağımsız • Max <span style={{color:P.ember}}>10</span> poz</div>
+        {/* Strategy Mode Selector */}
+        <div style={{display:"flex",gap:4,marginBottom:10}}>
+          {[["martingale","📐 Martingale"],["darphane","🏛️ Darphane"],["combo","🔥 Combo"]].map(([k,l])=>
+            <button key={k} onClick={()=>setStratMode(k)} style={{fontFamily:Fm,fontSize:11,fontWeight:700,padding:"7px 14px",borderRadius:8,flex:1,background:stratMode===k?k==="combo"?"linear-gradient(135deg,#7B5CF5,#2DC771)":k==="darphane"?"rgba(249,115,22,0.15)":"rgba(123,92,245,0.15)":"transparent",border:`1px solid ${stratMode===k?(k==="combo"?P.violet:k==="darphane"?P.ember:P.violet):P.border}`,color:stratMode===k?P.white:P.ash,cursor:"pointer"}}>{l}</button>
+          )}
         </div>
+
+        {/* Strategy Info */}
+        <div style={{background:P.surface,borderRadius:8,padding:"8px 12px",marginBottom:10,fontFamily:Fm,fontSize:10,lineHeight:1.6}}>
+          {stratMode==="martingale"&&<>
+            <div style={{color:P.violet,fontWeight:600}}>📐 Martingale Strateji</div>
+            <div style={{color:P.ash}}>• Fiyat {'<'} EMA → LONG | Fiyat {'>'} EMA + RSI{'>'}70 → SHORT</div>
+            <div style={{color:P.ash}}>• APTR mesafesiyle katman katman giriş</div>
+          </>}
+          {stratMode==="darphane"&&<>
+            <div style={{color:P.ember,fontWeight:600}}>🏛️ Darphane Strateji (Pine Script)</div>
+            <div style={{color:P.ash}}>• RSI {drpCount}+ bar eşik altında → Destek bölgesi → Yeşil mum = <span style={{color:P.jade}}>LONG</span></div>
+            <div style={{color:P.ash}}>• RSI {drpCount}+ bar eşik üstünde → Direnç bölgesi → Kırmızı mum = <span style={{color:P.danger}}>SHORT</span></div>
+            <div style={{color:P.ash}}>• EMA200 trend filtresi{drpTrend?" aktif":" kapalı"} • Hacim anomalisi teyidi</div>
+          </>}
+          {stratMode==="combo"&&<>
+            <div style={{color:P.jade,fontWeight:600}}>🔥 Combo = Martingale + Darphane</div>
+            <div style={{color:P.ash}}>• İki sinyal aynı yönü gösterirse: <span style={{color:"#FFD700",fontWeight:600}}>GÜÇLÜ SİNYAL</span></div>
+            <div style={{color:P.ash}}>• Tek sinyal yeterse: normal giriş • İkisi de yoksa: bekle</div>
+          </>}
+        </div>
+
+        {/* Darphane params (show when darphane or combo) */}
+        {(stratMode==="darphane"||stratMode==="combo")&&<div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap"}}>
+          <div style={{flex:1,minWidth:120}}>
+            <div style={{fontFamily:Fm,fontSize:9,color:P.ash,marginBottom:3}}>RSI Eşik (30→70/30)</div>
+            <div style={{display:"flex",gap:3}}>{[20,25,30,35].map(v=>
+              <button key={v} onClick={()=>setDrpThresh(v)} style={{fontFamily:Fm,fontSize:10,fontWeight:600,padding:"3px 8px",borderRadius:5,background:drpThresh===v?"rgba(249,115,22,0.15)":"transparent",border:`1px solid ${drpThresh===v?P.ember:P.border}`,color:drpThresh===v?P.ember:P.ash,cursor:"pointer"}}>{v}/{100-v}</button>
+            )}</div>
+          </div>
+          <div style={{flex:1,minWidth:100}}>
+            <div style={{fontFamily:Fm,fontSize:9,color:P.ash,marginBottom:3}}>Teyit Bar Sayısı</div>
+            <div style={{display:"flex",gap:3}}>{[2,3,4,5].map(v=>
+              <button key={v} onClick={()=>setDrpCount(v)} style={{fontFamily:Fm,fontSize:10,fontWeight:600,padding:"3px 8px",borderRadius:5,background:drpCount===v?"rgba(249,115,22,0.15)":"transparent",border:`1px solid ${drpCount===v?P.ember:P.border}`,color:drpCount===v?P.ember:P.ash,cursor:"pointer"}}>{v} bar</button>
+            )}</div>
+          </div>
+          <div style={{minWidth:80}}>
+            <div style={{fontFamily:Fm,fontSize:9,color:P.ash,marginBottom:3}}>EMA200 Trend</div>
+            <button onClick={()=>setDrpTrend(!drpTrend)} style={{fontFamily:Fm,fontSize:10,fontWeight:600,padding:"3px 10px",borderRadius:5,background:drpTrend?"rgba(45,199,113,0.15)":"rgba(239,68,68,0.1)",border:`1px solid ${drpTrend?P.jade:P.danger}`,color:drpTrend?P.jade:P.danger,cursor:"pointer"}}>{drpTrend?"ON":"OFF"}</button>
+          </div>
+        </div>}
 
         {/* Coin Selection with leverage badges */}
         <div style={{fontFamily:Fm,fontSize:9,color:P.ash,marginBottom:4}}>Coin seç {swapInfo?"(OKX max kaldıraç gösterilir)":"(yükleniyor...)"}:</div>
@@ -584,7 +716,7 @@ function PaperPanel({engine,setEngine,syms,cfg,tick,setTick}){
           })}
         </div>}
 
-        <button onClick={start} disabled={!selected.length||loading} style={{fontFamily:Fs,fontSize:12,fontWeight:700,padding:"9px 24px",borderRadius:10,background:selected.length?`linear-gradient(135deg,${P.jade},#1a9d5c)`:"#2A2D3A",border:"none",color:P.white,cursor:selected.length?"pointer":"not-allowed",boxShadow:selected.length?`0 4px 16px ${P.jade}40`:"none"}}>🚀 Başlat — {selected.length} coin — Hedge Mode — %1 Risk</button>
+        <button onClick={start} disabled={!selected.length||loading} style={{fontFamily:Fs,fontSize:12,fontWeight:700,padding:"9px 24px",borderRadius:10,background:selected.length?`linear-gradient(135deg,${P.jade},#1a9d5c)`:"#2A2D3A",border:"none",color:P.white,cursor:selected.length?"pointer":"not-allowed",boxShadow:selected.length?`0 4px 16px ${P.jade}40`:"none"}}>{loading?"⏳ Bars yükleniyor...":"🚀 "+{martingale:"Martingale",darphane:"Darphane",combo:"Combo"}[stratMode]+" — "+selected.length+" coin — %1 Risk"}</button>
       </>:<>
         {/* Stats */}
         <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(85px,1fr))",gap:4,marginBottom:8}}>
