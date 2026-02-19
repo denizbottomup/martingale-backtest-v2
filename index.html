@@ -212,17 +212,17 @@ function SignalCard({sig,sym,tf}){
   </div>;
 }
 
-// ═══ PAPER TRADING ENGINE v4 — OKX Perpetual Futures Rules ═══
-// Flow: coin seç → OKX'ten max lever çek → otomatik seç → %1 risk → kontrat = risk × lever → hacim = kontrat × 2
-// Hedge mode: aynı coin'de hem LONG hem SHORT açılabilir
-// Backtest (Martingale) ve Paper Trade BAĞIMSIZ — sadece APTR mesafesini paylaşırlar
+// ═══ PAPER TRADING ENGINE v5 — Signal-Based Martingale Futures ═══
+// Entry logic = calcSignal ile aynı: EMA altında + RSI OK → LONG, EMA üstünde + RSI>70 → SHORT
+// Katman mantığı = Martingale APTR mesafesi
+// Hedge mode: sinyal LONG verirken mevcut SHORT kapanmaz, bağımsız çalışır
 function createPaperEngine(initialCap=10000){
   return{
     cap:initialCap,cash:initialCap,peakEq:initialCap,
     bots:{},positions:[],trades:[],nextId:1,startTime:Date.now(),
-    riskPct:1,// bakiyenin %1'i riske edilir
-    maxPositions:10,// toplam max açık pozisyon
-    swapInfo:{},// OKX'ten gelen kontrat bilgileri
+    riskPct:1,maxPositions:10,swapInfo:{},
+    // Strategy config — set at start from backtest params
+    stratCfg:{eOn:true,eL:10,rOn:false,rV:71,aL:14,pD:2,man:true,mA:80,mP:40},
 
     getStats(){
       const w=this.trades.filter(t=>t.pnl>0),lo=this.trades.filter(t=>t.pnl<=0);
@@ -247,21 +247,60 @@ function createPaperEngine(initialCap=10000){
       };
     },
 
+    // Calculate signal from bars — same logic as calcSignal
+    _signal(sym){
+      const b=this.bots[sym];
+      if(!b||!b.bars||b.bars.length<20)return{dir:null,reason:"Yetersiz veri"};
+      const bars=b.bars;
+      const last=bars.length-1;
+      const p=b.lastPrice||bars[last].close;
+      const{eOn,eL,rOn,rV}=this.stratCfg;
+
+      const ema=_ema(bars,last,eL||10);
+      const rsi=_rsi(bars,last);
+
+      // LONG sinyal: fiyat EMA altında + RSI aşırı alımda değil
+      const belowEma=eOn?p<ema:true;
+      const rsiOk=rOn?rsi<rV:true;
+      const rsiOversold=rsi<30;
+      const rsiOverbought=rsi>70;
+
+      // SHORT sinyal: fiyat EMA üstünde + RSI aşırı alımda
+      const aboveEma=eOn?p>ema:false;
+
+      let dir=null;
+      let reason="";
+      if(belowEma&&rsiOk){dir="LONG";reason=`EMA altı (${p.toFixed(0)}<${ema.toFixed(0)}) RSI:${rsi.toFixed(0)}`;}
+      if(aboveEma&&rsiOverbought){dir="SHORT";reason=`EMA üstü + RSI aşırı (${rsi.toFixed(0)}>70)`;}
+      if(!dir)reason=`Sinyal yok — EMA:${ema.toFixed(0)} RSI:${rsi.toFixed(0)}`;
+
+      return{dir,reason,ema:+ema.toFixed(2),rsi:+rsi.toFixed(1)};
+    },
+
     tick(sym,price){
       const b=this.bots[sym];
       if(!b||!b.active)return null;
       b.lastPrice=price;
+
+      // Update last bar's close with live price for accurate EMA/RSI
+      if(b.bars&&b.bars.length>0){
+        const lb=b.bars[b.bars.length-1];
+        lb.close=price;
+        if(price>lb.high)lb.high=price;
+        if(price<lb.low)lb.low=price;
+      }
+
       const events=[];
       const base=sym.replace("-USDT","");
       const si=this.swapInfo[base]||{maxLever:20,ctVal:1};
       const maxLev=si.maxLever;
       const riskPct=this.riskPct;
+      const{man,mA,mP,aL,pD}=this.stratCfg;
 
-      // ── 1) Check SL / TP / Liq on existing positions (copy array to avoid mutation issues) ──
+      // ── 1) Check SL / TP / Liq on existing positions ──
       const toClose=[];
       this.positions.filter(p=>p.sym===sym).forEach(p=>{
-        // Skip positions opened less than 3 seconds ago (cooldown to avoid instant SL)
-        if(Date.now()-p.time<3000)return;
+        if(Date.now()-p.time<3000)return;// 3s cooldown
         let hit=null;
         if(p.side==="LONG"){
           if(price<=p.liq)hit={type:"LIQ",px:price};
@@ -274,14 +313,11 @@ function createPaperEngine(initialCap=10000){
         }
         if(hit)toClose.push({pos:p,hit});
       });
-
-      // Process closures
       toClose.forEach(({pos:p,hit})=>{
         let pnl;
         if(hit.type==="LIQ"){pnl=-p.margin;}
         else{pnl=p.side==="LONG"?(hit.px-p.ep)*p.qty:(p.ep-hit.px)*p.qty;}
         if(hit.type!=="LIQ")this.cash+=p.margin+pnl;
-        // else margin is lost (already deducted)
         this.trades.push({sym,side:p.side,entry:+p.ep.toFixed(2),exit:+hit.px.toFixed(2),qty:+p.qty.toFixed(6),margin:p.margin,notional:p.notional,lever:p.lever,sl:+p.sl.toFixed(2),tp:+p.tp.toFixed(2),liq:+p.liq.toFixed(2),volume:p.volume,pnl:+pnl.toFixed(2),pnlPct:+((pnl/p.margin)*100).toFixed(2),result:hit.type,time:Date.now()});
         events.push({type:hit.type,side:p.side,sym,price:+hit.px.toFixed(2),pnl:+pnl.toFixed(2),lever:p.lever});
       });
@@ -290,58 +326,76 @@ function createPaperEngine(initialCap=10000){
         this.positions=this.positions.filter(p=>!closedIds.has(p.id));
       }
 
-      // ── 2) Position sizing (OKX futures rules) ──
+      // ── 2) Signal check — same as backtest strategy ──
+      const sig=this._signal(sym);
+      if(!sig.dir){
+        // No signal — log once per 60s
+        if(!b._lastNoSig||Date.now()-b._lastNoSig>60000){
+          b._lastNoSig=Date.now();
+          events.push({type:"NOSIG",sym,reason:sig.reason,ema:sig.ema,rsi:sig.rsi});
+        }
+        return events.length?events:null;
+      }
+
+      // ── 3) Position sizing (OKX futures rules) ──
       const equity=this.cash+this.positions.reduce((s,p)=>s+p.margin,0);
-      const riskAmt=equity*(riskPct/100);// %1 risk = $100 on $10K
+      const riskAmt=equity*(riskPct/100);
       const margin=+riskAmt.toFixed(2);
-      const notional=+(margin*maxLev).toFixed(0);// kontrat değeri
-      const qty=notional/price;// coin adedi
-      const volume=notional*2;// hacim = kontrat × 2
-      // SL distance: loss at SL = riskAmt → slDist = riskAmt / qty = price / maxLev
-      const slDist=riskAmt/qty;
+      const notional=+(margin*maxLev).toFixed(0);
+      const qty=notional/price;
+      const volume=notional*2;
+
+      // ATR-based distances if bars available, otherwise fallback
+      let fA=man?mA:80;
+      let fT=man?mP:40;
+      if(b.bars&&b.bars.length>aL){
+        const atr=_atr(b.bars,b.bars.length-1,aL);
+        if(!man&&atr>0){fA=atr;fT=atr/pD;}
+      }
+
+      const slDist=riskAmt/qty;// SL distance → loss = riskAmt
       const tpDist=slDist*2;// R:R 1:2
-      const liqDist=(price/maxLev)*0.9;// isolated margin liq
+      const liqDist=(price/maxLev)*0.9;
 
       // Max position check
       if(this.positions.length>=this.maxPositions)return events.length?events:null;
       if(this.cash<margin)return events.length?events:null;
 
-      // ── 3) LONG entry — Martingale katman aralığı backtestten gelir (APTR) ──
-      const fA=b.cfg.mA||80;// APTR mesafesi — backtestle paylaşılan tek parametre
-      const curLongs=this.positions.filter(p=>p.sym===sym&&p.side==="LONG");
-      if(!curLongs.length){
-        if(this.cash>=margin){
+      // ── 4) LONG entry — only when signal says LONG ──
+      if(sig.dir==="LONG"){
+        const curLongs=this.positions.filter(p=>p.sym===sym&&p.side==="LONG");
+        if(!curLongs.length){
           const ep=price;
           const pos={id:this.nextId++,sym,side:"LONG",qty,ep,margin,notional,lever:maxLev,sl:+(ep-slDist).toFixed(4),tp:+(ep+tpDist).toFixed(4),liq:+(ep-liqDist).toFixed(4),volume:+volume.toFixed(0),time:Date.now()};
           this.positions.push(pos);this.cash-=margin;
-          events.push({type:"OPEN",side:"LONG",sym,layer:1,price:ep,margin,notional,qty:+qty.toFixed(6),sl:pos.sl,tp:pos.tp,liq:pos.liq,lever:maxLev,volume:+volume.toFixed(0)});
-        }
-      }else if(curLongs.length<5){
-        const lastEp=curLongs[curLongs.length-1].ep;
-        if(price<lastEp-fA&&this.cash>=margin&&this.positions.length<this.maxPositions){
-          const ly=curLongs.length+1;const ep=price;
-          const pos={id:this.nextId++,sym,side:"LONG",qty,ep,margin,notional,lever:maxLev,sl:+(ep-slDist).toFixed(4),tp:+(ep+tpDist).toFixed(4),liq:+(ep-liqDist).toFixed(4),volume:+volume.toFixed(0),time:Date.now()};
-          this.positions.push(pos);this.cash-=margin;
-          events.push({type:"OPEN",side:"LONG",sym,layer:ly,price:ep,margin,notional,qty:+qty.toFixed(6),sl:pos.sl,tp:pos.tp,liq:pos.liq,lever:maxLev,volume:+volume.toFixed(0)});
+          events.push({type:"OPEN",side:"LONG",sym,layer:1,price:ep,margin,notional,qty:+qty.toFixed(6),sl:pos.sl,tp:pos.tp,liq:pos.liq,lever:maxLev,volume:+volume.toFixed(0),reason:sig.reason});
+        }else if(curLongs.length<5){
+          const lastEp=curLongs[curLongs.length-1].ep;
+          if(price<lastEp-fA&&this.cash>=margin&&this.positions.length<this.maxPositions){
+            const ly=curLongs.length+1;const ep=price;
+            const pos={id:this.nextId++,sym,side:"LONG",qty,ep,margin,notional,lever:maxLev,sl:+(ep-slDist).toFixed(4),tp:+(ep+tpDist).toFixed(4),liq:+(ep-liqDist).toFixed(4),volume:+volume.toFixed(0),time:Date.now()};
+            this.positions.push(pos);this.cash-=margin;
+            events.push({type:"OPEN",side:"LONG",sym,layer:ly,price:ep,margin,notional,qty:+qty.toFixed(6),sl:pos.sl,tp:pos.tp,liq:pos.liq,lever:maxLev,volume:+volume.toFixed(0),reason:sig.reason});
+          }
         }
       }
 
-      // ── 4) SHORT entry — HEDGE MODE (bağımsız, aynı anda long+short) ──
-      const curShorts=this.positions.filter(p=>p.sym===sym&&p.side==="SHORT");
-      if(!curShorts.length){
-        if(b.basePrice&&price>b.basePrice+fA&&this.cash>=margin&&this.positions.length<this.maxPositions){
+      // ── 5) SHORT entry — only when signal says SHORT ──
+      if(sig.dir==="SHORT"){
+        const curShorts=this.positions.filter(p=>p.sym===sym&&p.side==="SHORT");
+        if(!curShorts.length){
           const ep=price;
           const pos={id:this.nextId++,sym,side:"SHORT",qty,ep,margin,notional,lever:maxLev,sl:+(ep+slDist).toFixed(4),tp:+(ep-tpDist).toFixed(4),liq:+(ep+liqDist).toFixed(4),volume:+volume.toFixed(0),time:Date.now()};
           this.positions.push(pos);this.cash-=margin;
-          events.push({type:"OPEN",side:"SHORT",sym,layer:1,price:ep,margin,notional,qty:+qty.toFixed(6),sl:pos.sl,tp:pos.tp,liq:pos.liq,lever:maxLev,volume:+volume.toFixed(0)});
-        }
-      }else if(curShorts.length<3){
-        const lastEp=curShorts[curShorts.length-1].ep;
-        if(price>lastEp+fA&&this.cash>=margin&&this.positions.length<this.maxPositions){
-          const ly=curShorts.length+1;const ep=price;
-          const pos={id:this.nextId++,sym,side:"SHORT",qty,ep,margin,notional,lever:maxLev,sl:+(ep+slDist).toFixed(4),tp:+(ep-tpDist).toFixed(4),liq:+(ep+liqDist).toFixed(4),volume:+volume.toFixed(0),time:Date.now()};
-          this.positions.push(pos);this.cash-=margin;
-          events.push({type:"OPEN",side:"SHORT",sym,layer:ly,price:ep,margin,notional,qty:+qty.toFixed(6),sl:pos.sl,tp:pos.tp,liq:pos.liq,lever:maxLev,volume:+volume.toFixed(0)});
+          events.push({type:"OPEN",side:"SHORT",sym,layer:1,price:ep,margin,notional,qty:+qty.toFixed(6),sl:pos.sl,tp:pos.tp,liq:pos.liq,lever:maxLev,volume:+volume.toFixed(0),reason:sig.reason});
+        }else if(curShorts.length<3){
+          const lastEp=curShorts[curShorts.length-1].ep;
+          if(price>lastEp+fA&&this.cash>=margin&&this.positions.length<this.maxPositions){
+            const ly=curShorts.length+1;const ep=price;
+            const pos={id:this.nextId++,sym,side:"SHORT",qty,ep,margin,notional,lever:maxLev,sl:+(ep+slDist).toFixed(4),tp:+(ep-tpDist).toFixed(4),liq:+(ep+liqDist).toFixed(4),volume:+volume.toFixed(0),time:Date.now()};
+            this.positions.push(pos);this.cash-=margin;
+            events.push({type:"OPEN",side:"SHORT",sym,layer:ly,price:ep,margin,notional,qty:+qty.toFixed(6),sl:pos.sl,tp:pos.tp,liq:pos.liq,lever:maxLev,volume:+volume.toFixed(0),reason:sig.reason});
+          }
         }
       }
       return events.length?events:null;
@@ -374,19 +428,38 @@ function PaperPanel({engine,setEngine,syms,cfg,tick,setTick}){
     return swapInfo?.[base]?.maxLever||20;
   };
 
-  const start=()=>{
+  const start=async()=>{
     if(!selected.length)return;
     setLoading(true);
     const eng=createPaperEngine(10000);
-    eng.riskPct=1;// sabit %1
+    eng.riskPct=1;
     if(swapInfo)eng.swapInfo=swapInfo;
+    // Pass backtest strategy config to engine for signal calculation
     const mA=cfg?.smartDefaults?.OTHER?.aptr?.[1]||80;
-    selected.forEach(sym=>{
-      eng.bots[sym]={cfg:{mA},active:true,lastPrice:null,basePrice:null};
+    eng.stratCfg={
+      eOn:true,eL:cfg?.defaults?.emaLength||10,
+      rOn:cfg?.defaults?.rsiEnabled||false,rV:cfg?.defaults?.rsiValue||71,
+      aL:cfg?.defaults?.atrLength||14,pD:cfg?.defaults?.pDivider||2,
+      man:true,mA,mP:mA/2,
+    };
+
+    // Fetch 1H bars for each coin (needed for EMA/RSI signal)
+    const barPromises=selected.map(sym=>
+      fetch(`/api/okx/candles/${sym}?bar=1H`).then(r=>r.json()).then(d=>({sym,bars:d.candles||[]})).catch(()=>({sym,bars:[]}))
+    );
+    const allBars=await Promise.all(barPromises);
+    allBars.forEach(({sym,bars})=>{
+      eng.bots[sym]={cfg:{mA},active:true,lastPrice:null,basePrice:null,bars};
     });
+
     setEngine(eng);setRunning(true);setLoading(false);
     const levList=selected.map(s=>s.replace("-USDT","")+"("+getLev(s)+"x)").join(", ");
-    setLogs([{t:Date.now(),msg:`🚀 Futures Paper — $10K — Risk %1 — Hedge Mode ON — ${selected.length} coin`},{t:Date.now()-1,msg:`⚡ Kaldıraçlar: ${levList}`}]);
+    setLogs([
+      {t:Date.now(),msg:`🚀 Signal-Based Futures — $10K — Risk %1 — Hedge Mode — ${selected.length} coin`},
+      {t:Date.now()-1,msg:`⚡ Kaldıraçlar: ${levList}`},
+      {t:Date.now()-2,msg:`📊 EMA(${eng.stratCfg.eL}) ${eng.stratCfg.eOn?"ON":"OFF"} | RSI ${eng.stratCfg.rOn?"<"+eng.stratCfg.rV:"OFF"} | APTR:$${mA}`},
+      {t:Date.now()-3,msg:`📈 Bars yüklendi: ${allBars.map(b=>b.sym.replace("-USDT","")+"("+b.bars.length+")").join(", ")}`},
+    ]);
 
     Object.keys(wsRefs.current).forEach(k=>{try{wsRefs.current[k].close();}catch(e){}});
     wsRefs.current={};
@@ -408,14 +481,15 @@ function PaperPanel({engine,setEngine,syms,cfg,tick,setTick}){
                 const cn=ev.sym.replace("-USDT","");
                 if(ev.type==="OPEN"){
                   const ico=ev.side==="LONG"?"🟢":"🔴";
-                  return{t:Date.now(),msg:`${ico} ${ev.side} ${cn} K${ev.layer} | ${ev.lever}x | $${ev.price.toFixed(2)} | Mrj:$${ev.margin} | Poz:$${ev.notional} | Vol:$${ev.volume} | SL:$${ev.sl} TP:$${ev.tp}`};
+                  return{t:Date.now(),msg:`${ico} ${ev.side} ${cn} K${ev.layer} | ${ev.lever}x | $${ev.price.toFixed(2)} | Mrj:$${ev.margin} | Poz:$${ev.notional} | Vol:$${ev.volume} | SL:$${ev.sl} TP:$${ev.tp} | ${ev.reason||""}`};
                 }
                 if(ev.type==="TP")return{t:Date.now(),msg:`✅ TP ${ev.side} ${cn} | ${ev.lever}x — $${ev.price} — +$${ev.pnl}`};
                 if(ev.type==="SL")return{t:Date.now(),msg:`⛔ SL ${ev.side} ${cn} | ${ev.lever}x — $${ev.price} — $${ev.pnl}`};
                 if(ev.type==="LIQ")return{t:Date.now(),msg:`💀 LIQ ${ev.side} ${cn} — $${Math.abs(ev.pnl)} margin kaybedildi`};
+                if(ev.type==="NOSIG")return{t:Date.now(),msg:`⏸ ${cn}: ${ev.reason}`};
                 return{t:Date.now(),msg:JSON.stringify(ev)};
-              }),...prev].slice(0,100));
-              setTick(prev=>prev+1);// trigger re-render without breaking engine methods
+              }),...prev].slice(0,150));
+              setTick(prev=>prev+1);
             }
           }catch(err){}
         };
@@ -458,7 +532,7 @@ function PaperPanel({engine,setEngine,syms,cfg,tick,setTick}){
       <div style={{display:"flex",alignItems:"center",gap:8}}>
         {running&&stats&&<>
           <span style={{fontFamily:Fm,fontSize:10,color:P.ash}}>Risk %1</span>
-          <span style={{fontFamily:Fm,fontSize:10,color:P.ash}}>Hedge</span>
+          <span style={{fontFamily:Fm,fontSize:10,color:P.violet}}>Signal</span>
           <span style={{fontFamily:Fm,fontSize:10,color:P.ash}}>WR:{stats.winRate}%</span>
           <span style={{fontFamily:Fm,fontSize:10,color:P.jade}}>L:{stats.longCount}</span>
           <span style={{fontFamily:Fm,fontSize:10,color:P.danger}}>S:{stats.shortCount}</span>
@@ -474,13 +548,12 @@ function PaperPanel({engine,setEngine,syms,cfg,tick,setTick}){
         {/* Info Box */}
         <div style={{background:P.surface,borderRadius:8,padding:"8px 12px",marginBottom:10,fontFamily:Fm,fontSize:10,lineHeight:1.6}}>
           <div style={{color:P.mist}}>📋 <span style={{color:P.white,fontWeight:600}}>Kurallar:</span></div>
-          <div style={{color:P.ash}}>• Coin seç → OKX'ten max kaldıraç otomatik gelir</div>
-          <div style={{color:P.ash}}>• Her işlemde bakiyenin <span style={{color:P.ember,fontWeight:600}}>%1</span>'i riske edilir → Risk = $100</div>
-          <div style={{color:P.ash}}>• Kontrat = Risk × Kaldıraç → örn: $100 × 125x = <span style={{color:P.white,fontWeight:600}}>$12,500</span></div>
-          <div style={{color:P.ash}}>• Hacim = Kontrat × 2 → <span style={{color:P.cobalt,fontWeight:600}}>$25,000</span></div>
-          <div style={{color:P.ash}}>• <span style={{color:P.jade}}>Hedge Mode</span>: Aynı coin'de eş zamanlı Long + Short</div>
-          <div style={{color:P.ash}}>• R:R 1:2 • SL ve TP otomatik • Max <span style={{color:P.ember,fontWeight:600}}>10 pozisyon</span></div>
-          <div style={{color:P.ash,fontSize:9,marginTop:2}}>⚠️ Backtest (Martingale) ve Paper Trade bağımsız — sadece APTR katman mesafesini paylaşır</div>
+          <div style={{color:P.ash}}>• <span style={{color:P.jade}}>LONG</span>: Fiyat {'<'} EMA + RSI uygun → Martingale katmanlar</div>
+          <div style={{color:P.ash}}>• <span style={{color:P.danger}}>SHORT</span>: Fiyat {'>'} EMA + RSI {'>'} 70 → Ters katmanlar</div>
+          <div style={{color:P.ash}}>• Sinyal yoksa pozisyon <span style={{color:P.ember,fontWeight:600}}>açılmaz</span> — bekler</div>
+          <div style={{color:P.ash}}>• Her işlemde bakiyenin <span style={{color:P.ember,fontWeight:600}}>%1</span>'i risk • R:R 1:2 • OKX max kaldıraç</div>
+          <div style={{color:P.ash}}>• Kontrat = Risk × Lever • Hacim = Kontrat × 2</div>
+          <div style={{color:P.ash}}>• <span style={{color:P.violet}}>Hedge</span>: Aynı coin'de Long + Short bağımsız • Max <span style={{color:P.ember}}>10</span> poz</div>
         </div>
 
         {/* Coin Selection with leverage badges */}
